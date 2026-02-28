@@ -111,25 +111,23 @@ AFuture<OpenAIChat::Response> OpenAIChat::chat(AString message) {
 
 AFuture<OpenAIChat::Response> OpenAIChat::chat(AVector<Message> messages) {
   messages.insert(messages.begin(), {Message::Role::SYSTEM_PROMPT, systemPrompt});
-  return AUI_THREADPOOL -> Response {
-    auto query = AJson::toString({
-        {
-          "messages", aui::to_json(messages),
-        },
-        { "stream", false },
-        { "use_context", false },
-        { "include_sources", true },
-        { "model", config::MODEL },
-        { "tools", tools },
-      });
-    AFileOutputStream("query.json") << query.toStdString();
-    ALOG_DEBUG(LOG_TAG) << "Query: " << query;
-    auto response = AJson::fromBuffer(ACurl::Builder(baseUrl + "v1/chat/completions")
-      .withMethod(ACurl::Method::HTTP_POST)
-      .withTimeout(4h)
-      .withHeaders({"Content-Type: application/json"})
-      .withBody(query.toStdString()).runAsync()->body);
-    ALOG_DEBUG(LOG_TAG) << "Response: " << AJson::toString(response);
-    return aui::from_json<Response>(response);
-  };
+  auto query = AJson::toString({
+      {
+        "messages", aui::to_json(messages),
+      },
+      { "stream", false },
+      { "use_context", false },
+      { "include_sources", true },
+      { "model", config::MODEL },
+      { "tools", tools },
+    });
+  AFileOutputStream("query.json") << query.toStdString();
+  ALOG_DEBUG(LOG_TAG) << "Query: " << query;
+  auto response = AJson::fromBuffer((co_await ACurl::Builder(baseUrl + "v1/chat/completions")
+    .withMethod(ACurl::Method::HTTP_POST)
+    .withTimeout(4h)
+    .withHeaders({"Content-Type: application/json"})
+    .withBody(query.toStdString()).runAsync()).body);
+  ALOG_DEBUG(LOG_TAG) << "Response: " << AJson::toString(response);
+  co_return aui::from_json<Response>(response);
 };

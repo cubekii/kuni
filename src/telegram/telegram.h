@@ -16,7 +16,7 @@ namespace telegram {
         AOptional<message_id_t> messageThreadId;
         AString text;
         AOptional<AImage> image;
-        AString parseMode = "MarkdownV2";
+        AString parseMode;
 
         AJson::Array entities;
 
@@ -36,7 +36,7 @@ namespace telegram {
     AFuture<> placeReaction(chat_id_t chatId, message_id_t messageId,
                             AString reaction);
 
-    void answerCallbackQuery(AString queryId);
+    AFuture<> answerCallbackQuery(AString queryId);
 
     AFuture<AJson> longPoll();
 }

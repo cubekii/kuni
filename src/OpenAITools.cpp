@@ -20,21 +20,24 @@ void OpenAITools::addTool(const Tool& tool, Handler handler) {
     handlers[tool.name] = std::move(handler);
 }
 
-AVector<OpenAIChat::Message>OpenAITools::handleToolCalls(const AVector<OpenAIChat::Message::ToolCall>& toolCalls) {
-    return toolCalls.map([&](const OpenAIChat::Message::ToolCall& toolCall) {
-        return OpenAIChat::Message{
-                .role = OpenAIChat::Message::Role::TOOL,
-                .content = [&]() -> AString {
-                    try {
-                        if (auto c = handlers.contains(toolCall.function.name)) {
-                            return c->second(AJson::fromString(toolCall.function.arguments));
-                        }
-                        return "error: no such tool: " + toolCall.function.name;
-                    } catch (const AException& e) {
-                        return "error: {}"_format(e.getMessage());
+AFuture<AVector<OpenAIChat::Message>> OpenAITools::handleToolCalls(const AVector<OpenAIChat::Message::ToolCall>& toolCalls) {
+    AVector<OpenAIChat::Message> result;
+    for (const auto& toolCall : toolCalls) {
+        result << OpenAIChat::Message{
+            .role = OpenAIChat::Message::Role::TOOL,
+            .content = co_await [&]() -> AFuture<AString> {
+                try {
+                    if (auto c = handlers.contains(toolCall.function.name)) {
+                        co_return co_await c->second(AJson::fromString(toolCall.function.arguments));
                     }
-                }(),
-                .tool_call_id = toolCall.id,
+                    co_return "error: no such tool: " + toolCall.function.name;
+                } catch (const AException& e) {
+                    co_return "error while executing \"{}\" tool: {}"_format(toolCall.function.name, e.getMessage());
+                }
+            }(),
+            .tool_call_id = toolCall.id,
         };
-    });
+    }
+    co_return result;
+
 }

@@ -82,8 +82,8 @@ TEST(OpenAIChat, ToolUsage) {
                 {"timezone", { .type = "string", .description = "The timezone to use for the time." }},
             },
         },
-    }, [](const AJson& json) {
-        return "12:00 AM";
+    }, [](const AJson& json) -> AFuture<AString> {
+        co_return "12:00 AM";
     });
     OpenAIChat session{
         .systemPrompt = SYSTEM_PROMPT,
@@ -100,7 +100,7 @@ TEST(OpenAIChat, ToolUsage) {
     ASSERT_FALSE(response.choices.empty());
     ASSERT_FALSE(response.choices[0].message.tool_calls.empty());
     messages << response.choices[0].message;
-    messages << tools.handleToolCalls(response.choices[0].message.tool_calls);
+    messages << *tools.handleToolCalls(response.choices[0].message.tool_calls);
 
     response = *session.chat(messages);
     ASSERT_FALSE(response.choices.empty());

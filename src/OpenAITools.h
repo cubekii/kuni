@@ -7,7 +7,7 @@
 
 struct OpenAITools {
     AJson asJson = AJson::Array{};
-    using Handler = std::function<AString(const AJson&)>;
+    using Handler = std::function<AFuture<AString>(const AJson&)>;
     AMap<AString, Handler> handlers;
 
     struct Tool {
@@ -27,5 +27,5 @@ struct OpenAITools {
         bool strict = true;
     };
     void addTool(const Tool& tool, Handler handler);
-    AVector<OpenAIChat::Message> handleToolCalls(const AVector<OpenAIChat::Message::ToolCall>& toolCalls);
+    AFuture<AVector<OpenAIChat::Message>> handleToolCalls(const AVector<OpenAIChat::Message::ToolCall>& toolCalls);
 };

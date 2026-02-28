@@ -9,9 +9,14 @@ public:
     void run();
 
 private:
-    void setupLongPoll();
-
     AAsyncHolder mAsync;
     OpenAITools mTools;
+
+    AVector<OpenAIChat::Message> mMessages {};
+
+    void setupLongPoll();
+
+    void passEventToAI(AString notification);
+
 };
 

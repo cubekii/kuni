@@ -16,17 +16,27 @@ static constexpr auto LOG_TAG = "App";
 
 App::App() {
     mTools.addTool({
-        .name = "get_time",
-        .description = "Retrieves the current time.",
+        .name = "send_telegram_message",
+        .description = "Sends a message to a Telegram user.",
         .parameters = {
             .properties = {
-                {"timezone", { .type = "string", .description = "The timezone to use for the time." }},
+                {"chat_id", { .type = "integer", .description = "The ID of the Telegram chat" }},
+                {"message", { .type = "string", .description = "Contents of the message" }},
             },
+            .required = {"chat_id", "message"},
         },
-    }, [](const AJson& json) {
-        return "12:00 AM";
+    }, [](const AJson& args) -> AFuture<AString> {
+        const auto& object = args.asObjectOpt().valueOrException("object expected");
+        auto chatId = object["chat_id"].asLongIntOpt().valueOrException("`chat_id` integer expected");
+        auto message = object["message"].asStringOpt().valueOrException("`message` string expected");
+        co_await telegram::postMessage({
+            .chatId = chatId,
+            .text = message,
+        });
+        co_return "Message sent successfully.";
     });
 }
+
 void App::run() {
     AThread::current()->enqueue([this] {
         ALogger::info(LOG_TAG) << "Bot is up and running. Press enter to exit.";
@@ -44,44 +54,49 @@ void App::run() {
     IEventLoop::Handle h(&loop);
     loop.loop();
 }
+
 void App::setupLongPoll() {
-    mAsync << telegram::longPoll().onSuccess([this](const AJson& j) {
-        mAsync << AUI_THREADPOOL {
-            for (const auto& entry  : j.asArray()) {
-                const auto& message = entry["message"];
-                auto fromId = message["chat"]["id"].asLongInt();
-                OpenAIChat chat {
-                    .systemPrompt = config::SYSTEM_PROMPT,
-                    .tools = mTools.asJson,
-                };
+    mAsync << [](App& app) -> AFuture<> {
+        AUI_DEFER { app.setupLongPoll(); };
+        auto j = co_await telegram::longPoll();
 
-                AVector<OpenAIChat::Message> messages {
-                    {
-                        .role = OpenAIChat::Message::Role::USER,
-                        .content = message["text"].asString(),
-                    },
-                };
-
-                naxyi:
-                AFuture<OpenAIChat::Response> botAnswer = chat.chat(messages);
-
-                if (botAnswer->choices.empty()) {
-                    return;
-                }
-                messages << botAnswer->choices.at(0).message;
-                if (!botAnswer->choices.at(0).message.tool_calls.empty()) {
-                    messages << mTools.handleToolCalls(botAnswer->choices.at(0).message.tool_calls);
-                    goto naxyi;
-                }
-
-                *telegram::postMessage({
-                    .chatId = fromId,
-                    .text = botAnswer->choices.at(0).message.content,
-                    .parseMode = "",
-                });
-            }
-        };
-    }).onFinally([this] { setupLongPoll(); });
+        for (const auto& entry  : j.asArray()) {
+            const auto& message = entry["message"];
+            auto fromId = message["chat"]["id"].asLongInt();
+            app.passEventToAI("You received a message from {} {} (chat_id = {}):\n\n{}"_format(message["from"]["first_name"].asString(), message["from"]["last_name"].asString(), fromId, message["text"].asString()));
+        }
+    }(*this);
 
 }
 
+/**
+ * @brief Passes an event to the AI to process
+ * @param notification notification text message in natural language (i.e., "you received a message from "...": ...; an
+ * alarm triggerred, etc...)
+ * @details
+ * Think of it as your phone's notifications: you receive a notification, read it and (maybe) react to it.
+ */
+void App::passEventToAI(AString notification) {
+    getThread()->enqueue([this, self = shared_from_this(), notification = std::move(notification)] {
+        OpenAIChat chat {
+            .systemPrompt = config::SYSTEM_PROMPT,
+            .tools = mTools.asJson,
+        };
+        mMessages << OpenAIChat::Message{
+            .role = OpenAIChat::Message::Role::USER,
+            .content = std::move(notification),
+        };
+
+        naxyi:
+        OpenAIChat::Response botAnswer = *chat.chat(mMessages);
+        mMessages << botAnswer.choices.at(0).message;
+
+        if (botAnswer.choices.empty() || botAnswer.choices.at(0).message.tool_calls.empty()) {
+            return;
+        }
+
+        mMessages << *mTools.handleToolCalls(botAnswer.choices.at(0).message.tool_calls);
+        mMessages.last().content += "\nWhat's your next action? Use a `tool` to act. The following tools available: " + AStringVector(mTools.handlers.keyVector()).join(", ");
+        goto naxyi;
+    });
+}
