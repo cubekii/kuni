@@ -7,7 +7,7 @@ struct OpenAIChat {
     AString systemPrompt;
     AString baseUrl =  "http://" AUI_PP_STRINGIZE(OPENAICHAT_ADDRESS) "/";
 
-    AJson tools;
+    AJson tools = AJson::Array{};
 
 
     struct Message {
@@ -53,4 +53,38 @@ struct OpenAIChat {
 
     AFuture<Response> chat(AString message);
     AFuture<Response> chat(AVector<Message> messages);
+};
+
+template<>
+struct AJsonConv<OpenAIChat::Message::Role> {
+    static AJson toJson(OpenAIChat::Message::Role v) {
+        switch (v) {
+            case OpenAIChat::Message::Role::ASSISTANT: return "assistant";
+            case OpenAIChat::Message::Role::USER: return "user";
+            case OpenAIChat::Message::Role::SYSTEM_PROMPT: return "system";
+            case OpenAIChat::Message::Role::TOOL: return "tool";
+        }
+        return "unknown";
+    }
+
+    static void fromJson(const AJson& json, OpenAIChat::Message::Role& out) {
+        const auto& str = json.asString();
+        if (str == "assistant") {
+            out = OpenAIChat::Message::Role::ASSISTANT;
+            return;
+        }
+        if (str == "user") {
+            out = OpenAIChat::Message::Role::USER;
+            return;
+        }
+        if (str == "system") {
+            out = OpenAIChat::Message::Role::SYSTEM_PROMPT;
+            return;
+        }
+        if (str == "tool") {
+            out = OpenAIChat::Message::Role::TOOL;
+            return;
+        }
+        throw AException("invalid role: " + str);
+    }
 };
