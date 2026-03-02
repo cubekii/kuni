@@ -1,14 +1,8 @@
 cmake_minimum_required(VERSION 4.0)
-project(kuni)
+project(kuni VERSION 1.0.0)
 
-set(TELEGRAM_API_TOKEN "" CACHE STRING "Telegram BOT API token (bot_id:secret). Mandatory")
 set(OPENAICHAT_ADDRESS "localhost:11434" CACHE STRING "Address to privateGPT")
 option(BUILD_SHARED_LIBS OFF)
-
-
-if (NOT TELEGRAM_API_TOKEN)
-    message(FATAL_ERROR "Please set TELEGRAM_API_TOKEN.")
-endif()
 
 set(AUI_VERSION 6d0908466c44959edffba506e850948f9c50d087)
 
@@ -30,10 +24,17 @@ auib_import(aui https://github.com/aui-framework/aui
 
 auib_import(date https://github.com/HowardHinnant/date)
 
+set(AUIB_TD_VALIDATE OFF)
+auib_import(Td https://github.com/tdlib/td
+        VERSION e597838)
+
 aui_executable(${PROJECT_NAME})
-aui_enable_tests(${PROJECT_NAME})
-target_compile_definitions(${PROJECT_NAME} PRIVATE TELEGRAM_API_TOKEN=${TELEGRAM_API_TOKEN} OPENAICHAT_ADDRESS=${OPENAICHAT_ADDRESS})
-target_compile_definitions(Tests PRIVATE TELEGRAM_API_TOKEN=${TELEGRAM_API_TOKEN} OPENAICHAT_ADDRESS=${OPENAICHAT_ADDRESS})
+target_compile_definitions(${PROJECT_NAME} PRIVATE OPENAICHAT_ADDRESS=${OPENAICHAT_ADDRESS})
+target_compile_definitions(Tests PRIVATE OPENAICHAT_ADDRESS=${OPENAICHAT_ADDRESS})
+
+target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/secrets)
 
 # Link required libs
-aui_link(${PROJECT_NAME} PUBLIC aui::core aui::json aui::curl aui::crypt aui::image)
+aui_link(${PROJECT_NAME} PUBLIC aui::core aui::json aui::curl aui::crypt aui::image Td::TdStatic)
+
+aui_enable_tests(${PROJECT_NAME})

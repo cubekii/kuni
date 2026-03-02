@@ -1,5 +1,6 @@
 #pragma once
 #include "AUI/Common/AObject.h"
+#include "AUI/Common/ATimer.h"
 #include "AUI/Thread/AAsyncHolder.h"
 #include "AUI/Thread/AEventLoop.h"
 #include "OpenAITools.h"
@@ -7,11 +8,12 @@
 class AppBase: public AObject {
 public:
     AppBase();
-    void run();
 
     void passEventToAI(AString notification);
 
     void dairyDumpMessages();
+
+    void actProactively();
 
 protected:
     AAsyncHolder mAsync;
@@ -19,8 +21,6 @@ protected:
         ALogger::warn("AppBase") << "telegramPostMessage stub (" << chatId << ", " << text << ")";
         co_return;
     }
-
-    virtual void telegramSetupLongPoll() {}
 
     /**
      * @brief Returns dairy entries that was saved previously by dairySave.
@@ -33,12 +33,14 @@ protected:
         ALogger::warn("AppBase") << "dairySave stub (" << message << ")";
     }
 
-    virtual bool dairyEntryIsRelatedToCurrentContext(const AString& dairyEntry);
+    virtual AFuture<bool> dairyEntryIsRelatedToCurrentContext(const AString& dairyEntry);
 
 private:
+    std::queue<AString> mNotifications;
+    AFuture<> mNotificationsSignal;
+    _<ATimer> mWakeupTimer;
     OpenAITools mTools;
     aui::lazy<AVector<AString>> mCachedDairy = [this]{ return dairyRead(); };
-    AEventLoop mEventLoop;
 
     AVector<OpenAIChat::Message> mTemporaryContext {};
 

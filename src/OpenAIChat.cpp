@@ -19,7 +19,6 @@
 #include "AUI/Reflect/AEnumerate.h"
 #include "AUI/Util/kAUI.h"
 #include "config.h"
-#include "telegram/telegram.h"
 
 static constexpr auto LOG_TAG = "OpenAIChat";
 
