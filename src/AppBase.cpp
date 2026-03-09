@@ -168,12 +168,13 @@ AppBase::AppBase(): mWakeupTimer(_new<ATimer>(2h)) {
             OpenAIChat::Response botAnswer = co_await llm.chat(self.mTemporaryContext);
             AUI_ASSERT(AThread::current() == self.getThread());
 
-            self.mTemporaryContext << botAnswer.choices.at(0).message;
-
             if (botAnswer.choices.empty() || botAnswer.choices.at(0).message.tool_calls.empty()) {
+                // no tool calls.
+                // this is a normal response.
+                // we wont store it in temporary context because its excess noise.
                 goto finish;
             }
-
+            self.mTemporaryContext << botAnswer.choices.at(0).message;
             self.mTemporaryContext << co_await notification.actions.handleToolCalls(botAnswer.choices.at(0).message.tool_calls);
             ALOG_DEBUG(LOG_TAG) << "Tool call response: " << self.mTemporaryContext.last().content;
             AUI_ASSERT(AThread::current() == self.getThread());
@@ -224,13 +225,23 @@ AFuture<> AppBase::diaryDumpMessages() {
         goto naxyi;
     }
     auto id = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-    for (const auto& take : botAnswer.choices.at(0).message.content.split("---")) {
+    auto message = botAnswer.choices.at(0).message.content;
+
+    // stupid AI sometimes messes up with separators
+    message.replaceAll("- --", "---");
+    message.replaceAll("-- -", "---");
+
+    for (const auto& take : message.split("---")) {
         if (take.length() < 20) {
             continue; // random shit
         }
         auto embedding = co_await chat.embedding(take);
         if (auto query = co_await diaryQuery(embedding); !query.empty()) {
             ALogger::info("AppBase") << "{}.md"_format(id) << ": plagiarism factor other_id=\"" << query.first().entry->id << "\" relatedness =" << float(query.first().relatedness);
+            if (query.first().relatedness > config::DIARY_PLAGIARISM_THRESHOLD) {
+                ALogger::info("AppBase") << "{}.md"_format(id) << ": won't store because it's plagiarism other_id=\"" << query.first().entry->id << "\"";
+                continue;
+            }
         }
 
         diarySave({
@@ -342,6 +353,7 @@ std::list<AppBase::DiaryEntryEx> AppBase::diaryParse(AVector<DiaryEntry> diary) 
     //
     // parse prologue to from md file with metadata.
     return diary | ranges::view::transform([](DiaryEntry& entry) {
+        entry.text = entry.text.trim('\n');
         try {
             if (!entry.text.startsWith("---")) {
                 return DiaryEntryEx {

@@ -246,14 +246,33 @@ namespace {
                 senderName = sender->first_name_ + " " + sender->last_name_;
             }
             checkForMaliciousPayloads(senderName);
-            AString result = "<{} message_id=\"{}\""_format(xmlTag, msg.id_);
+            AString formattedXmlTag = "{} message_id=\"{}\""_format(xmlTag, msg.id_);
             if (!senderName.empty()) {
-                result += " sender=\"{}\""_format(senderName);
+                formattedXmlTag += " sender=\"{}\""_format(senderName);
             }
             if (chat.last_read_outbox_message_id_ < msg.id_) {
-                result += " unread";
+                formattedXmlTag += " unread";
             }
-            result += ">\n";
+            if (msg.forward_info_) {
+                formattedXmlTag += " forwarded_from=\"";
+                auto forwardedFromChatId = [&] {
+                    switch (msg.forward_info_->origin_->get_id()) {
+                        case td::td_api::messageOriginChannel::ID:
+                            return static_cast<td::td_api::messageOriginChannel&>(*msg.forward_info_->origin_).chat_id_;
+                        case td::td_api::messageOriginUser::ID:
+                            return static_cast<td::td_api::messageOriginUser&>(*msg.forward_info_->origin_).sender_user_id_;
+                        case td::td_api::messageOriginChat::ID:
+                            return static_cast<td::td_api::messageOriginChat&>(*msg.forward_info_->origin_).sender_chat_id_;
+                        default:
+                            return td::td_api::int53(0);
+                    }
+                }();
+                if (forwardedFromChatId != 0) {
+                    formattedXmlTag += (co_await mTelegram->sendQueryWithResult(TelegramClient::toPtr(td::td_api::getChat(forwardedFromChatId))))->title_;
+                }
+                formattedXmlTag += "\"";
+            }
+            auto result = "<{}>\n"_format(formattedXmlTag);
             if (xmlTag != "reply_to") {
                 if (msg.reply_to_ && msg.reply_to_->get_id() == td::td_api::messageReplyToMessage::ID) {
                     auto reply =
@@ -383,7 +402,7 @@ namespace {
                     []<typename T>(T&) { static_assert(sizeof(T) > 0, "Unknown message type"); },
                 });
 
-            result += "\n</{}>\n"_format(xmlTag);
+            result += "\n</{}>\n"_format(formattedXmlTag);
             co_return result;
         }
 
