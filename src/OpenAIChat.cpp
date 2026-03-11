@@ -149,14 +149,15 @@ AFuture<OpenAIChat::Response> OpenAIChat::chat(AVector<Message> messages) {
       { "tools", tools },
       { "temperature", config::TEMPERATURE },
     });
-  AFileOutputStream("query.json") << query.toStdString();
-  ALOG_DEBUG(LOG_TAG) << "Query: " << query;
+  AFileOutputStream("last_query.json") << query.toStdString();
+  ALOG_TRACE(LOG_TAG) << "Query: " << query;
   auto response = AJson::fromBuffer((co_await ACurl::Builder(baseUrl + "v1/chat/completions")
     .withMethod(ACurl::Method::HTTP_POST)
     .withTimeout(4h)
     .withHeaders({"Content-Type: application/json"})
     .withBody(query.toStdString()).runAsync()).body);
-  ALOG_DEBUG(LOG_TAG) << "Response: " << AJson::toString(response);
+  AFileOutputStream("last_response.json") << query.toStdString();
+  ALOG_TRACE(LOG_TAG) << "Response: " << AJson::toString(response);
   co_return aui::from_json<Response>(response);
 }
 

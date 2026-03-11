@@ -28,7 +28,7 @@ namespace {
 
     class App : public AppBase {
     public:
-        App() {
+        App(): AppBase("data") {
             mTelegram->onEvent = [this](td::td_api::object_ptr<td::td_api::Object> event) {
                 td::td_api::downcast_call(*event,
                                           [this](auto& u) { mAsync << this->handleTelegramEvent(std::move(u)); });
@@ -54,31 +54,6 @@ namespace {
                 }();
                 return msg;
             }());
-        }
-
-        AVector<DiaryEntry> diaryRead() const override {
-            APath diaryDir(DIARY_DIR);
-            if (!diaryDir.isDirectoryExists()) {
-                return {};
-            }
-            AVector<DiaryEntry> diary;
-            for (const auto& file: diaryDir.listDir()) {
-                if (file.isRegularFileExists() && file.extension() == "md") {
-                    diary << DiaryEntry {
-                        .id = file.filenameWithoutExtension(),
-                        .text = AString::fromUtf8(AByteBuffer::fromStream(AFileInputStream(file))),
-                    };
-                }
-            }
-            return diary;
-        }
-
-        void diarySave(const DiaryEntry& entry) override {
-            APath diaryDir(DIARY_DIR);
-            diaryDir.makeDirs();
-            auto diaryFile = diaryDir / "{}.md"_format(entry.id);
-            AFileOutputStream(diaryFile) << entry.text;
-            ALogger::info("App") << "diarySave: " << diaryFile;
         }
 
         void updateTools(OpenAITools& actions) override {

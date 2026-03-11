@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 4.0)
+cmake_minimum_required(VERSION 3.18)
 project(kuni VERSION 1.0.0)
 
 set(OPENAICHAT_ADDRESS "localhost:11434" CACHE STRING "Address to privateGPT")

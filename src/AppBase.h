@@ -3,11 +3,12 @@
 #include "AUI/Common/ATimer.h"
 #include "AUI/Thread/AAsyncHolder.h"
 #include "AUI/Thread/AEventLoop.h"
+#include "Diary.h"
 #include "OpenAITools.h"
 
 class AppBase: public AObject {
 public:
-    AppBase();
+    AppBase(APath workingDir = "test_data");
 
 
 
@@ -26,54 +27,14 @@ public:
 
     void actProactively();
 
-
-    struct DiaryEntry {
-        AString id;
-        AString text;
-    };
-
-    struct DiaryEntryEx {
-        AString id;
-        struct Metadata {
-            float score = 0.f;
-            AString lastUsed = "never";
-            int usageCount = 0;
-            std::valarray<float> embedding;
-        } metadata;
-        AString freeformBody;
-
-        void incrementUsageCount() {
-            metadata.usageCount++;
-            metadata.lastUsed = "{}"_format(std::chrono::system_clock::now());
-        }
-    };
-
-    struct DiaryEntryExAndRelatedness {
-        std::list<DiaryEntryEx>::iterator entry;
-        aui::float_within_0_1 relatedness;
-    };
-
     [[nodiscard]] const AVector<OpenAIChat::Message>& temporaryContext() const { return mTemporaryContext; }
 
-    AFuture<AVector<DiaryEntryExAndRelatedness>> diaryQuery(const std::valarray<float>& query);
+    [[nodiscard]] Diary& diary() { return mDiary; }
 
 protected:
     AAsyncHolder mAsync;
 
     aui::float_within_0_1 mRelevanceThreshold = 0.5f;
-
-    /**
-     * @brief Returns diary entries that was saved previously by diarySave.
-     */
-    virtual AVector<DiaryEntry> diaryRead() const {
-        return {};
-    }
-
-    virtual void diarySave(const DiaryEntry& dairyEntry) {
-        ALogger::warn("AppBase") << "diarySave stub (" << dairyEntry.text << ")";
-    }
-
-    virtual AFuture<aui::float_within_0_1> diaryEntryIsRelated(const std::valarray<float>& context, DiaryEntryEx& entry);
 
     /**
      * @brief Adds always available actions
@@ -98,11 +59,8 @@ private:
     AFuture<> mNotificationsSignal;
     _<ATimer> mWakeupTimer;
     // OpenAITools mTools;
-    static std::list<DiaryEntryEx> diaryParse(AVector<DiaryEntry> diary);
 
-    void diarySave(const DiaryEntryEx& dairyEntry);
-
-    aui::lazy<std::list<DiaryEntryEx>> mCachedDiary = [this]{ return diaryParse(diaryRead()); };
+    Diary mDiary{"diary"};
 
     AVector<OpenAIChat::Message> mTemporaryContext {};
 

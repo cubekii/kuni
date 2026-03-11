@@ -12,19 +12,12 @@
 namespace {
     class AppMock : public AppBase {
     public:
-        MOCK_METHOD(void, diarySave, (const AppBase::DiaryEntry& message), (override));
-        MOCK_METHOD(AVector<AppBase::DiaryEntry>, diaryRead, (), (const override));
-        MOCK_METHOD(void, telegramPostMessage, (const AString& message), ());
-        MOCK_METHOD(void, onDiaryEntryIsRelated, ((const std::valarray<float>& context), (const DiaryEntryEx& entry), (aui::float_within_0_1 relatence)), ());
-
-    protected:
-        AFuture<aui::float_within_0_1> diaryEntryIsRelated(const std::valarray<float>& context,
-                                                           DiaryEntryEx& entry) override {
-            auto response = co_await AppBase::diaryEntryIsRelated(context, entry);
-            onDiaryEntryIsRelated(context, entry, response);
-            co_return response;
+        AppMock() {
         }
 
+        MOCK_METHOD(void, telegramPostMessage, (const AString& message), ());
+
+    protected:
         void updateTools(OpenAITools& actions) override {
             actions.insert({
                 .name = "send_telegram_message",
@@ -49,16 +42,11 @@ namespace {
 } // namespace
 
 TEST(Diary, Basic) {
+    APath("test_data").removeFileRecursive();
     AEventLoop loop;
     IEventLoop::Handle h(&loop);
     AAsyncHolder async;
-    AVector<AString> diary;
     auto app = _new<AppMock>();
-    ON_CALL(*app, diarySave(testing::_)).WillByDefault([&](const AppBase::DiaryEntry& message) {
-        ALogger::info("AppMock") << "diarySave: " << message.text;
-        diary << message.text;
-    });
-    EXPECT_CALL(*app, diarySave(testing::_)).Times(testing::AtLeast(1));
 
     async << app->passNotificationToAI(R"(
 Today you read an article. Contents below.
@@ -85,27 +73,25 @@ trigraph substitution, see /Zc:trigraphs (Trigraphs Substitution).
         loop.iteration();
     }
 
-    if (!ranges::any_of(diary, [&](const auto& text) { return text.contains("trigraphs"); })) {
-        GTEST_FAIL() << "We expect LLM to save info about c++ trigraphs to the diary. Diary: " << diary;
+    app->diary().reload();
+
+    if (!ranges::any_of(app->diary().list(), [&](const auto& text) { return text.freeformBody.contains("trigraphs"); })) {
+        GTEST_FAIL() << "We expect LLM to save info about c++ trigraphs to the diary.";
     }
 }
 
 TEST(Diary, Remember) {
+    APath("test_data").removeFileRecursive();
     AEventLoop loop;
     IEventLoop::Handle h(&loop);
     AAsyncHolder async;
-    AVector<AppBase::DiaryEntry> diary;
 
     {
         auto app = _new<AppMock>();
         testing::InSequence s;
         ON_CALL(*app, telegramPostMessage(testing::_))
             .WillByDefault([](AString text) -> AFuture<> { co_return; });
-        EXPECT_CALL(*app, diarySave(testing::_)).Times(testing::AtLeast(1));
-        ON_CALL(*app, diarySave(testing::_)).WillByDefault([&](const AppBase::DiaryEntry& message) noexcept {
-            ALogger::info("AppMock") << "diarySave: " << message.text;
-            diary << message;
-        });
+        EXPECT_CALL(*app, telegramPostMessage(testing::_)).Times(testing::AtLeast(1));
 
         async << app->passNotificationToAI(R"(
 You received a message from Alex2772 (chat_id=1):
@@ -120,7 +106,8 @@ Today I was playing several games of Dota 2. Both times I was playing Arc Warden
         while (async.size() > 0) {
             loop.iteration();
         }
-        if (!ranges::any_of(diary, [](const auto& i) { return i.text.lowercase().contains("warden"); })) {
+        app->diary().reload();
+        if (!ranges::any_of(app->diary().list(), [](const auto& i) { return i.freeformBody.lowercase().contains("warden"); })) {
             GTEST_FAIL() << "We expect LLM to save info about Arc Warden";
         }
     }
@@ -130,8 +117,8 @@ Today I was playing several games of Dota 2. Both times I was playing Arc Warden
     // we expect AI to remember Alex2772 plays Arc Warden.
     {
         auto app = _new<AppMock>();
-        ON_CALL(*app, diaryRead()).WillByDefault([&] { return testing::Return(diary); }());
         testing::InSequence s;
+        bool called = false;
         async << app->passNotificationToAI(R"(
 You received a message from Alex2772 (chat_id=1):
 
@@ -140,23 +127,21 @@ Today I won a match in Dota 2
 Guess which hero I was playing :)
 )");
         ON_CALL(*app, telegramPostMessage(testing::_))
-            .WillByDefault([](AString text) noexcept -> AFuture<> {
+            .WillByDefault([&](AString text) noexcept -> AFuture<> {
                 const auto lower = text.lowercase();
                 if (!(lower.contains("arc") && lower.contains("warden"))) {
                     throw AException("we expect AI to remember Arc Warden");
                 }
+                called = true;
                 co_return;
             });
 
-        ON_CALL(*app, onDiaryEntryIsRelated(testing::_, testing::_, testing::_)).WillByDefault([](const std::valarray<float>& context, const AppMock::DiaryEntryEx& entry, aui::float_within_0_1 relatence) {
-            ALogger::info("AppMock") << "onDiaryEntryIsRelated: ";
-
-        });
-        EXPECT_CALL(*app, onDiaryEntryIsRelated(testing::_, testing::_, testing::_)).Times(diary.size());
-        EXPECT_CALL(*app, telegramPostMessage(testing::_));
+        EXPECT_CALL(*app, telegramPostMessage(testing::_)).Times(testing::AtLeast(1));
 
         while (async.size() > 0) {
             loop.iteration();
         }
+
+        EXPECT_TRUE(called);
     }
 }
