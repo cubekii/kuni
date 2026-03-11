@@ -147,6 +147,7 @@ AFuture<OpenAIChat::Response> OpenAIChat::chat(AVector<Message> messages) {
       { "include_sources", true },
       { "model", model },
       { "tools", tools },
+      { "temperature", config::TEMPERATURE },
     });
   AFileOutputStream("query.json") << query.toStdString();
   ALOG_DEBUG(LOG_TAG) << "Query: " << query;

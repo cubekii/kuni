@@ -77,6 +77,9 @@ AppBase::AppBase(): mWakeupTimer(_new<ATimer>(2h)) {
                 .content = std::move(notification.message),
             };
 
+            bool noopWarning = true;
+            bool toolCallsHappened = false;
+
 
             naxyi_populate_ctx:
 
@@ -96,10 +99,12 @@ AppBase::AppBase(): mWakeupTimer(_new<ATimer>(2h)) {
                 AString diary;
 
                 auto pickup = [&](const DiaryEntryExAndRelatedness& i, AStringView tag = "your_diary_page") {
-                    i.entry->metadata.score += i.relatedness;
+                    i.entry->metadata.score += (i.relatedness - 0.5f) * 2.f;
+                    ALogger::info("AppBase") << "Loaded into context: " << i.entry->id << ".md relatedness=" << i.relatedness << "\n" << i.entry->freeformBody;
                     i.entry->incrementUsageCount();
                     self.diarySave(*i.entry);
-                    diary += "<{} additional_context just_for_reasoning no_plagiarism no_copy>\n{}\n</{}>\n"_format(tag, i.entry->freeformBody, tag);
+                    auto formattedTag = "{} additional_context just_for_reasoning no_plagiarism no_copy unverified"_format(tag);
+                    diary += "<{}>\n{}\n</{}>\n"_format(formattedTag, i.entry->freeformBody, formattedTag);
                     self.mCachedDiary->erase(i.entry);
                 };
 
@@ -170,9 +175,21 @@ AppBase::AppBase(): mWakeupTimer(_new<ATimer>(2h)) {
 
             if (botAnswer.choices.empty() || botAnswer.choices.at(0).message.tool_calls.empty()) {
                 // no tool calls.
+                if (!toolCallsHappened) {
+                    if (std::exchange(noopWarning, false)) {
+                        // punish llm for not performing tool calls.
+                        self.mTemporaryContext << OpenAIChat::Message{
+                            .role = OpenAIChat::Message::Role::USER,
+                            .content = "You didn't perform any action. Make sure you made tool calls."
+                        };
+                        goto naxyi_preserve_ctx;
+                    }
+                }
                 // this is a normal response.
                 // we wont store it in temporary context because its excess noise.
                 goto finish;
+            } else {
+                toolCallsHappened = true;
             }
             self.mTemporaryContext << botAnswer.choices.at(0).message;
             self.mTemporaryContext << co_await notification.actions.handleToolCalls(botAnswer.choices.at(0).message.tool_calls);
@@ -224,14 +241,23 @@ AFuture<> AppBase::diaryDumpMessages() {
     if (botAnswer.choices.at(0).message.content.empty()) {
         goto naxyi;
     }
+    mTemporaryContext << botAnswer.choices.at(0).message;
     auto id = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     auto message = botAnswer.choices.at(0).message.content;
 
     // stupid AI sometimes messes up with separators
     message.replaceAll("- --", "---");
     message.replaceAll("-- -", "---");
+    auto split = message.split("---");
 
-    for (const auto& take : message.split("---")) {
+    if (ranges::any_of(split, [](const auto& s) { return s.length() > 3000; })) {
+        mTemporaryContext << OpenAIChat::Message {
+            .role = OpenAIChat::Message::Role::USER,
+            .content = "One of your sections are too big. Shorten then and ensure correct division by \"---\".",
+        };
+    }
+
+    for (const auto& take : split) {
         if (take.length() < 20) {
             continue; // random shit
         }

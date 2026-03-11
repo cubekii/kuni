@@ -1,5 +1,6 @@
 #include <random>
 #include <range/v3/action/insert.hpp>
+#include <range/v3/algorithm/any_of.hpp>
 #include <range/v3/algorithm/max_element.hpp>
 #include <range/v3/algorithm/min_element.hpp>
 #include <range/v3/range/conversion.hpp>
@@ -444,9 +445,13 @@ namespace {
                         result += "No messages found.";
                         goto naxyi;
                     }
-                    fromMessage = response->messages_.back()->id_ + 1;
-                    messages.insert(messages.end(), std::make_move_iterator(response->messages_.begin()),
-                                    std::make_move_iterator(response->messages_.end()));
+                    fromMessage = response->messages_.back()->id_;
+                    for (auto& msg: response->messages_) {
+#if AUI_DEBUG
+                        AUI_ASSERT(!ranges::any_of(messages, [&](const auto& m) { return m->id_ == msg->id_; }));
+#endif
+                        messages.push_back(std::move(msg));
+                    }
                 }
             }
             {
