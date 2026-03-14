@@ -59,7 +59,7 @@ AppBase::AppBase(APath workingDir): mDiary(workingDir / "diary"), mWakeupTimer(_
     mWakeupTimer->start();
 
     mAsync << [](AppBase& self) -> AFuture<> {
-        co_await self.mDiary.sleepingConsolidation();
+        // co_await self.mDiary.sleepingConsolidation();
         for (;;) {
             AUI_ASSERT(AThread::current() == self.getThread());
             if (self.mNotifications.empty()) {
@@ -95,6 +95,7 @@ AppBase::AppBase(APath workingDir): mDiary(workingDir / "diary"), mWakeupTimer(_
                 //    random fact from their sick brain and start yelling "DID YOU KNOW U SHOULD SHIT STANDING UPRIGHT"
                 //    while didn't finish their explanation on why c++ is better than rust.
                 bool pauseFlag = false;
+                naxyi_populate_ctx:
                 if (!self.mDiary.list().empty()) {
                     AString diary;
 

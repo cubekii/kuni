@@ -1,5 +1,7 @@
 #include "Diary.h"
 
+#include <random>
+
 #include "AUI/IO/AFileInputStream.h"
 #include "AUI/IO/AFileOutputStream.h"
 #include "AUI/Logging/ALogger.h"
@@ -74,6 +76,14 @@ AFuture<AVector<Diary::EntryExAndRelatedness>> Diary::query(const std::valarray<
         };
     }) | ranges::to<AVector<EntryExAndRelatedness>>;
     ranges::sort(result, [](const auto& a, const auto& b) { return a.relatedness > b.relatedness; });
+    // avoid returning results that equal to the query.
+    while (!result.empty()) {
+        auto& [i, relevance] = result.front();
+        if (relevance < 0.9999f) {
+            break;
+        }
+        result.erase(result.begin());
+    }
     co_return result;
 }
 
@@ -141,11 +151,33 @@ AFuture<> Diary::sleepingConsolidation() {
         // auto middle = mCachedDiary->begin();
         // for (int i = 0; i < config::DIARY_TOKEN_COUNT_TRIGGER / config::DIARY_AVERAGE_ENTRY_SIZE && middle != mCachedDiary->end(); ++i, ++middle);
         // ranges::partial_sort(mCachedDiary, middle,)
-        auto& first = mCachedDiary->front();
-        if (first.metadata.embedding.size() == 0) {
-            first.metadata.embedding = co_await OpenAIChat{}.embedding(first.freeformBody);
+
+        auto target = [&] {
+            // pick a random target.
+            // in perspective, this gives more shuffled chunks, so each sleep consolidation slightly different chunks
+            // are compared.
+            // this gives uniform distribution of information and merging/splitting behavior.
+            static std::default_random_engine re(std::time(nullptr));
+            auto idx = re() % mCachedDiary->size();
+            auto entry = mCachedDiary->begin();
+            while (idx--) {
+                entry++;
+            }
+            auto asValue = std::move(*entry);
+            mCachedDiary->erase(entry);
+            return *entry;
+        }();
+        if (target.metadata.embedding.size() == 0) {
+            target.metadata.embedding = co_await OpenAIChat{}.embedding(target.freeformBody);
         }
-        auto results = co_await query(first.metadata.embedding, {.confidenceFactor = 0.f /* we need just embedding relatence */});
+        tryAgain:
+        AVector<EntryExAndRelatedness> results;
+        try {
+            results = co_await query(target.metadata.embedding, {.confidenceFactor = 0.f /* we need just embedding relatence */});
+        } catch (const AException& e) {
+            ALogger::err("Diary") << "sleepingConsolidation can't query " << e;
+            goto tryAgain;
+        }
 
         AStringVector ids;
         AStringVector idsToRemove;
