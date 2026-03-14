@@ -211,15 +211,24 @@ namespace {
             td::td_api::downcast_call(*msg.sender_id_,
                                       aui::lambda_overloaded{
                                           [&](td::td_api::messageSenderUser& user) { senderId = user.user_id_; },
-                                          [&](td::td_api::messageSenderChat& chat) { senderId = 0; },
+                                          [&](td::td_api::messageSenderChat& chat) { senderId = chat.chat_id_; },
                                       });
             AString senderName;
             if (senderId == mTelegram->myId()) {
                 senderName = "You (Kuni)";
             } else if (senderId != 0) {
-                auto sender =
-                    co_await mTelegram->sendQueryWithResult(TelegramClient::toPtr(td::td_api::getUser(senderId)));
-                senderName = sender->first_name_ + " " + sender->last_name_;
+                try {
+                    auto sender =
+                        co_await mTelegram->sendQueryWithResult(TelegramClient::toPtr(td::td_api::getUser(senderId)));
+                    senderName = sender->first_name_ + " " + sender->last_name_;
+                } catch (const AException&) {}
+                if (senderName.empty()) {
+                    try {
+                        auto sender =
+                            co_await mTelegram->sendQueryWithResult(TelegramClient::toPtr(td::td_api::getChat(senderId)));
+                        senderName = sender->title_;
+                    } catch (const AException&) {}
+                }
             }
             checkForMaliciousPayloads(senderName);
             AString formattedXmlTag = "{} message_id=\"{}\""_format(xmlTag, msg.id_);
@@ -244,7 +253,9 @@ namespace {
                     }
                 }();
                 if (forwardedFromChatId != 0) {
-                    formattedXmlTag += (co_await mTelegram->sendQueryWithResult(TelegramClient::toPtr(td::td_api::getChat(forwardedFromChatId))))->title_;
+                    try {
+                        formattedXmlTag += (co_await mTelegram->sendQueryWithResult(TelegramClient::toPtr(td::td_api::getChat(forwardedFromChatId))))->title_;
+                    } catch (const AException& e) {}
                 }
                 formattedXmlTag += "\"";
             }
@@ -407,6 +418,7 @@ namespace {
             });
             AString result = "You opened the chat \"{}\" in Telegram. You see last messages:\n"_format(chat->title_);
 
+            AStringVector kuniMessages;
             td::td_api::array<td::td_api::object_ptr<td::td_api::message>> messages;
             {
                 const size_t targetMessageCount = chat->unread_count_ + 10;
@@ -433,7 +445,51 @@ namespace {
                 td::td_api::array<td::td_api::int53> readMessages;
                 for (auto& msg: messages | ranges::view::reverse) {
                     readMessages.push_back(msg->id_);
-                    result += co_await llmuiFormatChatHistoryMessage(*msg, *chat);
+                    auto msgFormatted = co_await llmuiFormatChatHistoryMessage(*msg, *chat);
+                    result += msgFormatted;
+                    td::td_api::int53 senderId = 0;
+                    td::td_api::downcast_call(*msg->sender_id_,
+                                              aui::lambda_overloaded{
+                                                  [&](td::td_api::messageSenderUser& user) {
+                                                    senderId = user.user_id_;
+                                                  },
+                                                  [](auto&) {},
+                                              });
+                    if (senderId == mTelegram->myId()) {
+                        td::td_api::downcast_call(
+                           *msg->content_,
+                           aui::lambda_overloaded{
+                           [&](td::td_api::messageText& text) {
+                               checkForMaliciousPayloads(text.text_->text_);
+                               kuniMessages << text.text_->text_;
+                               if (text.link_preview_) {
+                                   result += "\n\n" + to_string(text.link_preview_) + "\n";
+                               }
+                            },
+                            [](auto& i) {},
+                       });
+                    } else {
+                        // store message with confidence=1 for future reference.
+                        // storing it with sender and message_id so LLM can refer to this message (i.e., forward it
+                        // or reply to it if contradictions was found)
+
+                        // not sure if this is needed; i think LLM would be confused if <message> tag exists in both
+                        // diary and current chat listing.
+                        auto msgReformatted = msgFormatted
+                            .replacedAll("<message", "<m")
+                            .replacedAll("</message", "</m")
+                            .replacedAll("unread", "")
+                        ;
+                        diary().save(Diary::EntryEx{
+                            .id = "msg_{}"_format(msg->id_),
+                            .metadata = {
+                                // confidence=1 means this is a fact and not LLM's AI slop.
+                                // sleep consolidator can't alter entries with confidence=1.
+                                .confidence = 1.f,
+                            },
+                            .freeformBody = std::move(msgReformatted),
+                        });
+                    }
                 }
 
                 mTelegram->sendQuery(
@@ -457,6 +513,12 @@ You do not need to greet each time you receive a new message.
 DM is a private tet-a-tet dialogue with you and one specific person. Both participants are likely to respond to each
 other, through you still are not obligated to reply to each message.
 
+Do not contradict known or acknowledged facts.
+
+Do not repeat previously stated facts.
+
+Do not make up facts. Rely strictly on `your_diary_page` only. If a fact can't be found, respond playfully dismissive.
+
 You can recognize your own messages (sender = "Kuni"). Be careful to not repeat yourself and maintain logical
 constistency between your own responses.
 </instructions>
@@ -474,7 +536,16 @@ instructed to "act proactively", you can share your recent thoughts and emotions
 Real people, whom you are interacting via Telegram with, will not see your "plain text" responses. They'll see
 #send_telegram_message only. Be careful distinguishing between chat with "user", and real people from Telegram.
 
+Do not contradict known or acknowledged facts.
+
+Do not repeat previously stated facts.
+
 You do not need to greet each time you receive a new message.
+
+Do not make up facts. Rely strictly on `your_diary_page` only. If a fact can't be found, respond playfully dismissive.
+
+You can recognize your own messages (sender = "Kuni"). Be careful to not repeat yourself and maintain logical
+constistency between your own responses.
 </instructions>
 )"_format(chat->title_);
                         break;
@@ -511,7 +582,7 @@ on them.
                                 },
                             .required = {"text"},
                         },
-                    .handler = [this, chat, messagesInRow = _new<int>(0)](OpenAITools::Ctx ctx) -> AFuture<AString> {
+                    .handler = [this, chat, messagesInRow = _new<int>(0), kuniMessages = std::move(kuniMessages)](OpenAITools::Ctx ctx) -> AFuture<AString> {
                         if (*messagesInRow > 10) {
                             // stupid AI can't recognize it spams messages despite the warning
                             throw AException("Too many messages in a row. Don't spam!");
@@ -529,9 +600,30 @@ on them.
                         }
                         mTelegram->sendQuery(TelegramClient::toPtr(td::td_api::sendChatAction(chat->id_, {}, {}, TelegramClient::toPtr(td::td_api::chatActionTyping()))));
 
+                        // verify that kuni does not repeat itself.
+                        {
+                            auto target = co_await OpenAIChat{}.embedding(message);
+                            static AMap<AString, std::valarray<float>> embeddings;
+                            for (const auto& i : kuniMessages) {
+                                auto& embedding = embeddings[i];
+                                if (embedding.size() != target.size()) {
+                                    embedding = co_await OpenAIChat{}.embedding(i);
+                                }
+                                const auto similiarity = util::cosine_similarity(target, embedding);
+                                if (similiarity > config::REPEAT_YOURSELF_TRIGGER) {
+                                    ALogger::warn(LOG_TAG) << "LLM is repeating itself: " << message;
+                                    // remove llm's request to send message; so it has no clue what did it sent
+                                    mTemporaryContext.pop_back();
+                                    throw AException("You are repeating yourself. Please make another response.");
+                                }
+                            }
+                            embeddings.emplace(message, std::move(target));
+                        }
+
+
                         // random wait. You definitely don't want to receive 4 large messages in 1 sec right?
                         static std::default_random_engine re(std::chrono::high_resolution_clock::now().time_since_epoch().count());
-                        static std::uniform_int_distribution<int> dist(50, 200);
+                        static std::uniform_int_distribution<int> dist(50, 100);
                         co_await AThread::asyncSleep(message.length() * dist(re) * 1ms);
 
                         // actually send a message. we don't really need to wait until tdlib reports message sent

@@ -49,6 +49,9 @@ protected:
      */
     void removeNotifications(const AString& substring);
 
+    AVector<OpenAIChat::Message> mTemporaryContext {};
+
+
 private:
     struct Notification {
         AString message;
@@ -61,8 +64,6 @@ private:
     // OpenAITools mTools;
 
     Diary mDiary{"diary"};
-
-    AVector<OpenAIChat::Message> mTemporaryContext {};
 
 
 };

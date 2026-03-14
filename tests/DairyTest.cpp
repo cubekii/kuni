@@ -34,7 +34,7 @@ namespace {
                     const auto& object = ctx.args.asObjectOpt().valueOrException("object expected");
                     auto message = object["text"].asStringOpt().valueOrException("`text` string expected");
                     telegramPostMessage(message);
-                    co_return "Message sent successfully.";
+                    co_return "Message sent successfully. Warning: you have sent a message. Consdier not spamming by using `wait` call.";
                 },
             });
         }
@@ -143,5 +143,99 @@ Guess which hero I was playing :)
         }
 
         EXPECT_TRUE(called);
+    }
+}
+
+TEST(Diary, Query) {
+    APath("test_data").removeFileRecursive();
+    Diary diary("test_data");
+    diary.save({
+        .id = "1",
+        .text = "John has brown eyes and black hair",
+    });
+    diary.save({
+        .id = "2",
+        .text = "John is 180cm tall and slim.",
+    });
+    diary.save({
+        .id = "3",
+        .text = "Today I saw news about btc below 20k. That's insane!",
+    });
+
+    AAsyncHolder async;
+
+    AEventLoop loop;
+    IEventLoop::Handle h(&loop);
+
+    diary.reload();
+    async << [&]() -> AFuture<> {
+        {
+            auto result = co_await diary.query(co_await OpenAIChat{}.embedding("crypto"), {});
+            EXPECT_TRUE(result.first().entry->freeformBody.contains("btc"));
+        }
+        {
+            auto result = co_await diary.query(co_await OpenAIChat{}.embedding("John"), {});
+            EXPECT_TRUE(result.last().entry->freeformBody.contains("btc"));
+        }
+    }();
+
+    while (async.size() > 0) {
+        loop.iteration();
+    }
+}
+
+TEST(Diary, Merge) {
+    APath("test_data").removeFileRecursive();
+    Diary diary("test_data");
+    diary.save({
+        .id = "1",
+        .text = "John appearance: has brown eyes and black hair",
+    });
+    diary.save({
+        .id = "2",
+        .text = "John appearance: is 180cm tall and slim.",
+    });
+    diary.save({
+        .id = "3",
+        .text = "Today I saw news about btc below 20k.",
+    });
+
+    AAsyncHolder async;
+
+    AEventLoop loop;
+    IEventLoop::Handle h(&loop);
+
+    diary.reload();
+    async << [&]() -> AFuture<> {
+        co_await diary.sleepingConsolidation();
+        EXPECT_EQ(diary.list().size(), 2);
+    }();
+
+    while (async.size() > 0) {
+        loop.iteration();
+    }
+}
+
+TEST(Diary, Split) {
+    APath("test_data").removeFileRecursive();
+    Diary diary("test_data");
+    diary.save({
+        .id = "1",
+        .text = "John appearance: has brown eyes and black hair. I think he is beautiful.",
+    });
+
+    AAsyncHolder async;
+
+    AEventLoop loop;
+    IEventLoop::Handle h(&loop);
+
+    diary.reload();
+    async << [&]() -> AFuture<> {
+        co_await diary.sleepingConsolidation();
+        EXPECT_EQ(diary.list().size(), 2);
+    }();
+
+    while (async.size() > 0) {
+        loop.iteration();
     }
 }

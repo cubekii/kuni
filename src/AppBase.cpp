@@ -59,6 +59,7 @@ AppBase::AppBase(APath workingDir): mDiary(workingDir / "diary"), mWakeupTimer(_
     mWakeupTimer->start();
 
     mAsync << [](AppBase& self) -> AFuture<> {
+        co_await self.mDiary.sleepingConsolidation();
         for (;;) {
             AUI_ASSERT(AThread::current() == self.getThread());
             if (self.mNotifications.empty()) {
@@ -71,144 +72,151 @@ AppBase::AppBase(APath workingDir): mDiary(workingDir / "diary"), mWakeupTimer(_
             }
             auto notification = std::move(self.mNotifications.front());
             AUI_DEFER { notification.onProcessed.supplyValue(); };
-            self.mNotifications.pop();
-            self.mTemporaryContext << OpenAIChat::Message{
-                .role = OpenAIChat::Message::Role::USER,
-                .content = std::move(notification.message),
-            };
-
-            bool noopWarning = true;
-            bool toolCallsHappened = false;
-
-
-            naxyi_populate_ctx:
-
-            // naxyi was here.
-            // the reasons why I have moved it below diary lookup:
-            // 1. Each lookup adds ~1s delay. So each time LLM uses send_telegram_message, there is a diary lookup.
-            // 2. Once again send_telegram_message. Instead of one big message, LLM is encouraged to send multiple small
-            //    messages instead (in the chatting culture the latter is more natural). When we insert occasional
-            //    diary entries between LLMs send_telegram_message calls, it simply loses its focus and starts to spam
-            //    with messages filled with random cues from the diary.
-            //
-            //    This feels like your participant has ADHD, and they can't finish their thought; instead they remember
-            //    random fact from their sick brain and start yelling "DID YOU KNOW U SHOULD SHIT STANDING UPRIGHT"
-            //    while didn't finish their explanation on why c++ is better than rust.
-            bool pauseFlag = false;
-            if (!self.mDiary.list().empty()) {
-                AString diary;
-
-                auto pickup = [&](const Diary::EntryExAndRelatedness& i, AStringView tag = "your_diary_page") {
-                    i.entry->metadata.score += (i.relatedness - 0.5f) * 2.f;
-                    i.entry->incrementUsageCount();
-                    ALogger::info("AppBase") << "Loaded into context: " << i.entry->id << ".md relatedness=" << i.relatedness << "\n" << i.entry->freeformBody;
-                    auto formattedTag = "{} additional_context just_for_reasoning no_plagiarism no_copy unverified"_format(tag);
-                    diary += "<{}>\n{}\n</{}>\n"_format(formattedTag, i.entry->freeformBody, formattedTag);
-                    self.mDiary.unload(i.entry);
+            try {
+                self.mNotifications.pop();
+                self.mTemporaryContext << OpenAIChat::Message{
+                    .role = OpenAIChat::Message::Role::USER,
+                    .content = std::move(notification.message),
                 };
 
-                // performs scan on diary based on entire context.
-                // this will find common cues which are related to current conversation.
-                {
-                    auto currentContext = co_await contextEmbedding(self.mTemporaryContext);
-                    auto relatednesses = co_await self.mDiary.query(currentContext);
+                bool noopWarning = true;
+                bool toolCallsHappened = false;
 
-                    for (const auto& i : relatednesses) {
-                        const auto&[entryIt, relatedness] = i;
-                        if (relatedness < self.mRelevanceThreshold) {
-                            if (diary.empty()) {
-                                // relax threshold for future queries.
-                                self.mRelevanceThreshold = glm::mix(0.5f, float(relatedness), 0.9f);
+
+                // naxyi was here.
+                // the reasons why I have moved it below diary lookup:
+                // 1. Each lookup adds ~1s delay. So each time LLM uses send_telegram_message, there is a diary lookup.
+                // 2. Once again send_telegram_message. Instead of one big message, LLM is encouraged to send multiple small
+                //    messages instead (in the chatting culture the latter is more natural). When we insert occasional
+                //    diary entries between LLMs send_telegram_message calls, it simply loses its focus and starts to spam
+                //    with messages filled with random cues from the diary.
+                //
+                //    This feels like your participant has ADHD, and they can't finish their thought; instead they remember
+                //    random fact from their sick brain and start yelling "DID YOU KNOW U SHOULD SHIT STANDING UPRIGHT"
+                //    while didn't finish their explanation on why c++ is better than rust.
+                bool pauseFlag = false;
+                if (!self.mDiary.list().empty()) {
+                    AString diary;
+
+                    auto pickup = [&](const Diary::EntryExAndRelatedness& i, AStringView tag = "your_diary_page") {
+                        i.entry->metadata.score += (i.relatedness - 0.5f) * 2.f;
+                        i.entry->incrementUsageCount();
+                        ALogger::info("AppBase") << "Loaded into context: " << i.entry->id << ".md relatedness=" << i.relatedness << "\n" << i.entry->freeformBody;
+                        auto formattedTag = "{} additional_context just_for_reasoning no_plagiarism no_copy"_format(tag);
+                        diary += "<{}>\n{}\n</{}>\n"_format(formattedTag, i.entry->freeformBody, formattedTag);
+                        self.mDiary.unload(i.entry);
+                    };
+
+                    // performs scan on diary based on entire context.
+                    // this will find common cues which are related to current conversation.
+                    {
+                        auto currentContext = co_await contextEmbedding(self.mTemporaryContext);
+                        auto relatednesses = co_await self.mDiary.query(currentContext, {});
+
+                        for (const auto& i : relatednesses) {
+                            const auto&[entryIt, relatedness] = i;
+                            if (relatedness < self.mRelevanceThreshold) {
+                                if (diary.empty()) {
+                                    // relax threshold for future queries.
+                                    self.mRelevanceThreshold = glm::mix(0.5f, float(relatedness), 0.9f);
+                                }
+                                break;
                             }
-                            break;
+                            if (diary.length() > config::DIARY_INJECTION_MAX_LENGTH / 2) {
+                                // set the minimum constraint for the future queries
+                                self.mRelevanceThreshold = relatedness;
+                                break;
+                            }
+                            pickup(i);
                         }
-                        if (diary.length() > config::DIARY_INJECTION_MAX_LENGTH) {
-                            // set the minimum constraint for the future queries
-                            self.mRelevanceThreshold = relatedness;
-                            break;
+                    }
+
+                    // address the last 1-2 entries from the temporary context.
+                    // this includes original notification or follow-up from tool responses (i.e., result of reading chat).
+                    // this helps switching between unrelated contexts.
+                    {
+                        auto query = co_await contextEmbedding(self.mTemporaryContext | ranges::view::take_last(2));
+                        auto relatednesses = co_await self.mDiary.query(query, {});
+                        for (const auto& i : relatednesses) {
+                            if (diary.length() > config::DIARY_INJECTION_MAX_LENGTH) {
+                                break;
+                            }
+                            pickup(i);
                         }
-                        pickup(i);
+                    }
+
+                    if (!diary.empty()) {
+                        diary += self.mTemporaryContext.last().content;
+                        self.mTemporaryContext.last().content = std::move(diary);
                     }
                 }
 
-                // address the last 1-2 entries from the temporary context.
-                // this includes original notification or follow-up from tool responses (i.e., result of reading chat).
-                // this helps switching between unrelated contexts.
-                {
-                    auto query = co_await contextEmbedding(self.mTemporaryContext | ranges::view::take_last(2));
-                    auto relatednesses = co_await self.mDiary.query(query);
-                    for (const auto& i : relatednesses | ranges::view::take(2)) {
-                        pickup(i, "kuni's_random_thought");
+                naxyi_preserve_ctx:
+                self.updateTools(notification.actions);
+                auto escape = [&](OpenAITools::Ctx ctx) -> AFuture<AString> {
+                    pauseFlag = true;
+                    co_return "Success";
+                };
+                notification.actions.insert({
+                    .name = "pause",
+                    .description = "Pauses the conversation",
+                    .handler = escape,
+                });
+                notification.actions.insert({
+                    .name = "wait",
+                    .description = "Wait until further notifications",
+                    .handler = escape,
+                });
+                OpenAIChat llm {
+                    .systemPrompt = config::SYSTEM_PROMPT,
+                    .tools = notification.actions.asJson(),
+                };
+
+                OpenAIChat::Response botAnswer = co_await llm.chat(self.mTemporaryContext);
+                AUI_ASSERT(AThread::current() == self.getThread());
+
+                if (botAnswer.choices.empty() || botAnswer.choices.at(0).message.tool_calls.empty()) {
+                    // no tool calls.
+                    ALogger::info(LOG_TAG) << "toolCallHappened=" << toolCallsHappened << " noopWarning=" << noopWarning;
+                    if (!toolCallsHappened) {
+                        if (std::exchange(noopWarning, false)) {
+                            // punish llm for not performing tool calls.
+                            ALogger::warn(LOG_TAG) << "LLM didn't perform any action.";
+                            self.mTemporaryContext << OpenAIChat::Message{
+                                .role = OpenAIChat::Message::Role::USER,
+                                .content = "You didn't perform any action. Make sure you made tool calls."
+                            };
+                            goto naxyi_preserve_ctx;
+                        }
                     }
+                    // this is a normal response.
+                    // we wont store it in temporary context because its excess noise.
+                    goto finish;
+                } else {
+                    toolCallsHappened = true;
                 }
+                self.mTemporaryContext << botAnswer.choices.at(0).message;
+                self.mTemporaryContext << co_await notification.actions.handleToolCalls(botAnswer.choices.at(0).message.tool_calls);
+                ALOG_DEBUG(LOG_TAG) << "Tool call response: " << self.mTemporaryContext.last().content;
+                AUI_ASSERT(AThread::current() == self.getThread());
 
-                if (!diary.empty()) {
-                    diary += self.mTemporaryContext.last().content;
-                    self.mTemporaryContext.last().content = std::move(diary);
-                }
-            }
-
-            naxyi_preserve_ctx:
-            self.updateTools(notification.actions);
-            auto escape = [&](OpenAITools::Ctx ctx) -> AFuture<AString> {
-                pauseFlag = true;
-                co_return "Success";
-            };
-            notification.actions.insert({
-                .name = "pause",
-                .description = "Pauses the conversation",
-                .handler = escape,
-            });
-            notification.actions.insert({
-                .name = "wait",
-                .description = "Wait until further notifications",
-                .handler = escape,
-            });
-            OpenAIChat llm {
-                .systemPrompt = config::SYSTEM_PROMPT,
-                .tools = notification.actions.asJson(),
-            };
-
-            OpenAIChat::Response botAnswer = co_await llm.chat(self.mTemporaryContext);
-            AUI_ASSERT(AThread::current() == self.getThread());
-
-            if (botAnswer.choices.empty() || botAnswer.choices.at(0).message.tool_calls.empty()) {
-                // no tool calls.
-                if (!toolCallsHappened) {
-                    if (std::exchange(noopWarning, false)) {
-                        // punish llm for not performing tool calls.
-                        self.mTemporaryContext << OpenAIChat::Message{
-                            .role = OpenAIChat::Message::Role::USER,
-                            .content = "You didn't perform any action. Make sure you made tool calls."
-                        };
-                        goto naxyi_preserve_ctx;
+                if (pauseFlag) {
+                    finish:
+                    if (botAnswer.usage.total_tokens >= config::DIARY_TOKEN_COUNT_TRIGGER) {
+                        co_await self.diaryDumpMessages();
                     }
+                    continue;
                 }
-                // this is a normal response.
-                // we wont store it in temporary context because its excess noise.
-                goto finish;
-            } else {
-                toolCallsHappened = true;
-            }
-            self.mTemporaryContext << botAnswer.choices.at(0).message;
-            self.mTemporaryContext << co_await notification.actions.handleToolCalls(botAnswer.choices.at(0).message.tool_calls);
-            ALOG_DEBUG(LOG_TAG) << "Tool call response: " << self.mTemporaryContext.last().content;
-            AUI_ASSERT(AThread::current() == self.getThread());
-
-            if (pauseFlag) {
-                finish:
-                if (botAnswer.usage.total_tokens >= config::DIARY_TOKEN_COUNT_TRIGGER) {
-                    co_await self.diaryDumpMessages();
+                if (!notification.actions.handlers().empty()) {
+                    self.mTemporaryContext.last().content += "\nWhat's your next action? Use a `tool` to act. The following tools available: " + AStringVector(notification.actions.handlers().keyVector()).join(", ");
                 }
-                continue;
-            }
-            if (!notification.actions.handlers().empty()) {
-                self.mTemporaryContext.last().content += "\nWhat's your next action? Use a `tool` to act. The following tools available: " + AStringVector(notification.actions.handlers().keyVector()).join(", ");
-            }
-            if (ranges::any_of(botAnswer.choices.at(0).message.tool_calls, [](const OpenAIChat::Message::ToolCall& t){ return t.function.name == "send_telegram_message"; })) {
-                goto naxyi_preserve_ctx;
-            } else {
-                goto naxyi_populate_ctx;
+                if (ranges::any_of(botAnswer.choices.at(0).message.tool_calls, [](const OpenAIChat::Message::ToolCall& t){ return t.function.name == "send_telegram_message"; })) {
+                    goto naxyi_preserve_ctx;
+                } else {
+                    goto naxyi_populate_ctx;
+                }
+            } catch (const AException& e) {
+                ALogger::err(LOG_TAG) << "Failed to process notification: \"" << notification.message << "\"" << e;
             }
         }
         co_return;
@@ -261,7 +269,7 @@ AFuture<> AppBase::diaryDumpMessages() {
             continue; // random shit
         }
         auto embedding = co_await chat.embedding(take);
-        if (auto query = co_await mDiary.query(embedding); !query.empty()) {
+        if (auto query = co_await mDiary.query(embedding, {.confidenceFactor = 0}); !query.empty()) {
             ALogger::info("AppBase") << "{}.md"_format(id) << ": plagiarism factor other_id=\"" << query.first().entry->id << "\" relatedness =" << float(query.first().relatedness);
             if (query.first().relatedness > config::DIARY_PLAGIARISM_THRESHOLD) {
                 ALogger::info("AppBase") << "{}.md"_format(id) << ": won't store because it's plagiarism other_id=\"" << query.first().entry->id << "\"";

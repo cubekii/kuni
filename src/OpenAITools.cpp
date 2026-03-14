@@ -36,6 +36,7 @@ AFuture<AVector<OpenAIChat::Message>> OpenAITools::handleToolCalls(const AVector
                     }
                     co_return "tool \"" + toolCall.function.name + "\" is not currently available. Please use another tool instead.";
                 } catch (const AException& e) {
+                    ALogger::err("OpenAITools") << "error while executing \"{}\" tool: "_format(toolCall.function.name) << e;
                     co_return "error while executing \"{}\" tool: {}"_format(toolCall.function.name, e.getMessage());
                 }
             }(),

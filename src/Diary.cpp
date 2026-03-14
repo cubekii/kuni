@@ -10,6 +10,7 @@
 
 #include <range/v3/algorithm/sort.hpp>
 #include <range/v3/range/conversion.hpp>
+#include <range/v3/view/enumerate.hpp>
 #include <range/v3/view/transform.hpp>
 
 Diary::Diary(APath diaryDir)
@@ -49,7 +50,7 @@ void Diary::save(const EntryEx& entry) {
     });
 }
 
-AFuture<AVector<Diary::EntryExAndRelatedness>> Diary::query(const std::valarray<float>& query) {
+AFuture<AVector<Diary::EntryExAndRelatedness>> Diary::query(const std::valarray<float>& query, QueryOpts opts) {
     struct DiaryEntryExAndRelatednessF {
         std::list<EntryEx>::iterator entry;
         AFuture<aui::float_within_0_1> relatedness;
@@ -60,7 +61,7 @@ AFuture<AVector<Diary::EntryExAndRelatedness>> Diary::query(const std::valarray<
     for (auto it = mCachedDiary->begin(); it != mCachedDiary->end(); ++it) {
         relatednesses << DiaryEntryExAndRelatednessF{
             .entry = it,
-            .relatedness = entryIsRelated(query, *it)
+            .relatedness = entryIsRelated(query, *it, opts)
         };
     }
     for (const auto&[_, relatedness] : relatednesses) {
@@ -76,11 +77,12 @@ AFuture<AVector<Diary::EntryExAndRelatedness>> Diary::query(const std::valarray<
     co_return result;
 }
 
-AFuture<aui::float_within_0_1> Diary::entryIsRelated(const std::valarray<float>& context, EntryEx& entry) {
+AFuture<aui::float_within_0_1> Diary::entryIsRelated(const std::valarray<float>& context, EntryEx& entry, QueryOpts opts) {
     if (entry.freeformBody.empty()) {
         co_return 0.f;
     }
     if (entry.freeformBody.contains("<important_note")) {
+        entry.metadata.confidence = 1.f;
         co_return 1.f;
     }
     if (entry.metadata.embedding.size() != context.size()) {
@@ -89,7 +91,7 @@ AFuture<aui::float_within_0_1> Diary::entryIsRelated(const std::valarray<float>&
         save(entry);
     }
     auto task = AUI_THREADPOOL_X [&] {
-        return aui::float_within_0_1((util::cosine_similarity(context, entry.metadata.embedding) + 1.f) / 2.f);
+        return aui::float_within_0_1((util::cosine_similarity(context, entry.metadata.embedding) + 1.f) / 2.f) + entry.metadata.confidence * opts.confidenceFactor;
     };
     co_return co_await task;
 }
@@ -124,3 +126,94 @@ void Diary::unload(std::list<EntryEx>::const_iterator it) {
     save(*it);
     mCachedDiary->erase(it);
 }
+
+struct SleepingConsolidationMeta {
+    float confidence;
+};
+
+AJSON_FIELDS(SleepingConsolidationMeta, AJSON_FIELDS_ENTRY(confidence))
+
+AFuture<> Diary::sleepingConsolidation() {
+    reload();
+    auto id = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto count = mCachedDiary->size();
+    while (!mCachedDiary->empty()) {
+        // auto middle = mCachedDiary->begin();
+        // for (int i = 0; i < config::DIARY_TOKEN_COUNT_TRIGGER / config::DIARY_AVERAGE_ENTRY_SIZE && middle != mCachedDiary->end(); ++i, ++middle);
+        // ranges::partial_sort(mCachedDiary, middle,)
+        auto& first = mCachedDiary->front();
+        if (first.metadata.embedding.size() == 0) {
+            first.metadata.embedding = co_await OpenAIChat{}.embedding(first.freeformBody);
+        }
+        auto results = co_await query(first.metadata.embedding, {.confidenceFactor = 0.f /* we need just embedding relatence */});
+
+        AStringVector ids;
+        AStringVector idsToRemove;
+
+        auto body = [&] {
+            AString body;
+            for (const auto&[i, entry] : results | ranges::view::enumerate) {
+                if (body.length() > config::DIARY_INJECTION_MAX_LENGTH && i >= 2) {
+                    break;
+                }
+                if (!body.empty()) {
+                    body += "\n\n---\n\n";
+                }
+                body += AJson::toString(aui::to_json(SleepingConsolidationMeta{
+                    .confidence = entry.entry->metadata.confidence,
+                }));
+                body += entry.entry->freeformBody;
+                body += "\n";
+                ids << entry.entry->id;
+                if (entry.entry->metadata.confidence < 0.9999999f) {
+                    idsToRemove << std::move(entry.entry->id);
+                }
+                mCachedDiary->erase(entry.entry);
+            }
+            return body;
+        }();
+        ALogger::info("Diary") << "[" << (count - mCachedDiary->size()) << "/" << count << "] sleepingConsolidation: " << ids;
+        ALOG_DEBUG("Diary") << "Prompt: " << body;
+
+        naxyi:
+        OpenAIChat chat { .systemPrompt = config::SLEEP_CONSOLIDATOR_PROMPT};
+        auto response = co_await chat.chat(std::move(body));
+
+        try {
+            ALOG_DEBUG("Diary") << "Response: " << response.choices.at(0).message.content;
+            response.choices.at(0).message.content.replaceAll("<important_note />", ""); // костыль
+            response.choices.at(0).message.content.replaceAll("<important_note/>", "");  // для другого
+            for (const auto& entry : response.choices.at(0).message.content.split("\n---")) {
+                if (entry.length() < 10) {
+                    continue; // unknown shit
+                }
+                auto metadata = aui::from_json<SleepingConsolidationMeta>(AJson::fromString(entry));
+                auto freeformBody = AStringView(AStringView(entry).bytes().substr(entry.bytes().find("}") + 1));
+                freeformBody = freeformBody.trim('\n');
+
+                if (metadata.confidence < -0.99999f) {
+                    // drop.
+                    continue;
+                }
+                save(EntryEx{
+                    .id = "{}"_format(id++),
+                    .metadata = {
+                        .confidence = glm::clamp(metadata.confidence, -0.99f, 0.99f),
+                    },
+                    .freeformBody = std::move(freeformBody),
+                });
+                for (const auto& id : idsToRemove) {
+                    auto file = mDiaryDir / "{}.md"_format(id);
+                    if (file.isRegularFileExists()) {
+                        file.removeFile();
+                    }
+                }
+            }
+        } catch (const AException& e) {
+            ALogger::err("Diary") << "sleepingConsolidation can't parse " << e;
+            goto naxyi;
+        }
+    }
+    reload();
+}
+

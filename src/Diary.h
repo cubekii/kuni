@@ -80,6 +80,11 @@ public:
             float score = 0.f;
 
             /**
+             * @brief Confidence factor, ∈ {-1..1}: -1 lie, 0 theory/default, 1 ground truth (immutable by sleep).
+             */
+            float confidence = 0.f;
+
+            /**
              * @brief Human‑readable timestamp of the last access.
              */
             AString lastUsed = "never";
@@ -153,6 +158,10 @@ public:
      */
     void unload(std::list<EntryEx>::const_iterator it);
 
+    struct QueryOpts {
+        aui::float_within_0_1 confidenceFactor = 0.2f;
+    };
+
     /**
      * @brief Asynchronously query the diary for entries related to a
      *        vector of embeddings.
@@ -162,7 +171,7 @@ public:
      * [0,1], and returns a sorted vector of {@link EntryExAndRelatedness}
      * objects.
      */
-    AFuture<AVector<EntryExAndRelatedness>> query(const std::valarray<float>& query);
+    AFuture<AVector<EntryExAndRelatedness>> query(const std::valarray<float>& query, QueryOpts opts);
 
     /**
      * @brief Compute the relatedness of a single entry to a context vector.
@@ -170,7 +179,7 @@ public:
      * If the entry does not yet have an embedding, it is generated via
      * {@link OpenAIChat::embedding} and persisted.
      */
-    AFuture<aui::float_within_0_1> entryIsRelated(const std::valarray<float>& context, EntryEx& entry);
+    AFuture<aui::float_within_0_1> entryIsRelated(const std::valarray<float>& context, EntryEx& entry, QueryOpts opts);
 
     /**
      * @brief Parse raw markdown entries into extended entries.
@@ -196,6 +205,14 @@ public:
      *        next access.
      */
     void reload() { mCachedDiary.reset(); }
+
+
+    /**
+     * @brief Performs "maintenance" of the diary contents.
+     * @details
+     * Like person's sleeping
+     */
+    AFuture<> sleepingConsolidation();
 
 private:
     /**
@@ -224,5 +241,5 @@ private:
     static AVector<Entry> read(const APath& path);
 };
 
-AJSON_FIELDS(Diary::EntryEx::Metadata, AJSON_FIELDS_ENTRY(score) AJSON_FIELDS_ENTRY(lastUsed)
+AJSON_FIELDS(Diary::EntryEx::Metadata, AJSON_FIELDS_ENTRY(score) (confidence, "confidence", AJsonFieldFlags::OPTIONAL) AJSON_FIELDS_ENTRY(lastUsed)
                                            AJSON_FIELDS_ENTRY(usageCount) AJSON_FIELDS_ENTRY(embedding))

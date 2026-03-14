@@ -26,60 +26,40 @@ static constexpr auto LOG_TAG = "OpenAIChat";
 using namespace std::chrono_literals;
 
 
-AJSON_FIELDS(OpenAIChat::Message::ToolCall::Function,
-AJSON_FIELDS_ENTRY(name)
-AJSON_FIELDS_ENTRY(arguments)
-)
+AJSON_FIELDS(OpenAIChat::Message::ToolCall::Function, AJSON_FIELDS_ENTRY(name) AJSON_FIELDS_ENTRY(arguments))
 
 AJSON_FIELDS(OpenAIChat::Message::ToolCall,
-AJSON_FIELDS_ENTRY(id)
-AJSON_FIELDS_ENTRY(index)
-AJSON_FIELDS_ENTRY(type)
-AJSON_FIELDS_ENTRY(function)
-)
+             AJSON_FIELDS_ENTRY(id) AJSON_FIELDS_ENTRY(index) AJSON_FIELDS_ENTRY(type) AJSON_FIELDS_ENTRY(function))
 
 AJSON_FIELDS(OpenAIChat::Message,
-AJSON_FIELDS_ENTRY(role)
-(content, "content", AJsonFieldFlags::OPTIONAL)
-(reasoning, "reasoning", AJsonFieldFlags::OPTIONAL)
-(tool_call_id, "tool_call_id", AJsonFieldFlags::OPTIONAL)
-(tool_calls, "tool_calls", AJsonFieldFlags::OPTIONAL)
-)
+             AJSON_FIELDS_ENTRY(role)(content, "content", AJsonFieldFlags::OPTIONAL)(reasoning, "reasoning",
+                                                                                     AJsonFieldFlags::OPTIONAL)(
+                 tool_call_id, "tool_call_id", AJsonFieldFlags::OPTIONAL)(tool_calls, "tool_calls",
+                                                                          AJsonFieldFlags::OPTIONAL))
 
 AJSON_FIELDS(OpenAIChat::Response::Choice,
-AJSON_FIELDS_ENTRY(index)
-AJSON_FIELDS_ENTRY(message)
-AJSON_FIELDS_ENTRY(finish_reason)
-)
+             AJSON_FIELDS_ENTRY(index) AJSON_FIELDS_ENTRY(message) AJSON_FIELDS_ENTRY(finish_reason))
 
 AJSON_FIELDS(OpenAIChat::Response,
-AJSON_FIELDS_ENTRY(id)
-AJSON_FIELDS_ENTRY(object)
-AJSON_FIELDS_ENTRY(created)
-AJSON_FIELDS_ENTRY(model)
-AJSON_FIELDS_ENTRY(system_fingerprint)
-AJSON_FIELDS_ENTRY(choices)
-AJSON_FIELDS_ENTRY(usage)
-)
+             AJSON_FIELDS_ENTRY(id) AJSON_FIELDS_ENTRY(object) AJSON_FIELDS_ENTRY(created) AJSON_FIELDS_ENTRY(model)
+                 AJSON_FIELDS_ENTRY(system_fingerprint) AJSON_FIELDS_ENTRY(choices) AJSON_FIELDS_ENTRY(usage))
 
 AJSON_FIELDS(OpenAIChat::Response::Usage,
-AJSON_FIELDS_ENTRY(prompt_tokens)
-AJSON_FIELDS_ENTRY(completion_tokens)
-AJSON_FIELDS_ENTRY(total_tokens)
+             AJSON_FIELDS_ENTRY(prompt_tokens) AJSON_FIELDS_ENTRY(completion_tokens) AJSON_FIELDS_ENTRY(total_tokens)
 
 )
 
 AFuture<OpenAIChat::Response> OpenAIChat::chat(AString message) {
-  return chat({
-    { Message::Role::USER, std::move(message)} ,
-  });
+    return chat({
+        {Message::Role::USER, std::move(message)},
+    });
 }
 
 template<>
 struct AJsonConv<AVector<OpenAIChat::Message>> {
     static AJson toJson(const AVector<OpenAIChat::Message>& v) {
         AJson::Array result;
-        for (const auto& message : v) {
+        for (const auto& message: v) {
             // reverse engineered from vscode copilot plugin
             if (message.content.contains("</{}>"_format(OpenAIChat::EMBEDDING_TAG))) {
                 auto content = std::string_view(message.content);
@@ -109,8 +89,7 @@ struct AJsonConv<AVector<OpenAIChat::Message>> {
                         {"role", aui::to_json(message.role)},
                         {"content",
                          AJson::Array{
-                             AJson::Object{{"type", "image_url"},
-                                           {"image_url", body}},
+                             AJson::Object{{"type", "image_url"}, {"image_url", body}},
                          }},
                     };
                     append(OpenAIChat::Message{
@@ -137,43 +116,54 @@ AString OpenAIChat::embedImage(AImageView image) {
 
 
 AFuture<OpenAIChat::Response> OpenAIChat::chat(AVector<Message> messages) {
-  messages.insert(messages.begin(), {Message::Role::SYSTEM_PROMPT, systemPrompt});
-  auto query = AJson::toString({
-      {
-        "messages", aui::to_json(messages),
-      },
-      { "stream", false },
-      { "use_context", false },
-      { "include_sources", true },
-      { "model", model },
-      { "tools", tools },
-      { "temperature", config::TEMPERATURE },
+    messages.insert(messages.begin(), {Message::Role::SYSTEM_PROMPT, systemPrompt});
+    auto query = AJson::toString({
+        {
+            "messages",
+            aui::to_json(messages),
+        },
+        {"stream", false},
+        {"use_context", false},
+        {"include_sources", true},
+        {"model", model},
+        {"tools", tools},
+        {"temperature", config::TEMPERATURE},
     });
-  AFileOutputStream("last_query.json") << query.toStdString();
-  ALOG_TRACE(LOG_TAG) << "Query: " << query;
-  auto response = AJson::fromBuffer((co_await ACurl::Builder(baseUrl + "v1/chat/completions")
-    .withMethod(ACurl::Method::HTTP_POST)
-    .withTimeout(4h)
-    .withHeaders({"Content-Type: application/json"})
-    .withBody(query.toStdString()).runAsync()).body);
-  AFileOutputStream("last_response.json") << query.toStdString();
-  ALOG_TRACE(LOG_TAG) << "Response: " << AJson::toString(response);
-  co_return aui::from_json<Response>(response);
+    AFileOutputStream("last_query.json") << query.toStdString();
+    const auto logsDir = APath("logs");
+    logsDir.makeDirs();
+    auto now = std::chrono::system_clock::now();
+    AFileOutputStream(logsDir / "{}.0query.json"_format(now)) << query.toStdString();
+
+    ALOG_TRACE(LOG_TAG) << "Query: " << query;
+    auto response = AJson::fromBuffer((co_await ACurl::Builder(baseUrl + "v1/chat/completions")
+                                           .withMethod(ACurl::Method::HTTP_POST)
+                                           .withTimeout(config::OPENAI_REQUEST_TIMEOUT)
+                                           .withHeaders({"Content-Type: application/json"})
+                                           .withBody(query.toStdString())
+                                           .runAsync())
+                                          .body);
+    AFileOutputStream("last_response.json") << response;
+    AFileOutputStream(logsDir / "{}.1response.json"_format(now)) << response;
+    ALOG_TRACE(LOG_TAG) << "Response: " << AJson::toString(response);
+    co_return aui::from_json<Response>(response);
 }
 
 AFuture<std::valarray<float>> OpenAIChat::embedding(AString input, AStringView embeddingModel) {
     auto response = AJson::fromBuffer((co_await ACurl::Builder(baseUrl + "v1/embeddings")
-      .withMethod(ACurl::Method::HTTP_POST)
-      .withTimeout(4h)
-      .withHeaders({"Content-Type: application/json"})
-      .withBody(AJson::toString(AJson::Object{
-          {"model", embeddingModel},
-          {"input", std::move(input)},
-      })).runAsync()).body);
+                                           .withMethod(ACurl::Method::HTTP_POST)
+                                           .withTimeout(4h)
+                                           .withHeaders({"Content-Type: application/json"})
+                                           .withBody(AJson::toString(AJson::Object{
+                                               {"model", embeddingModel},
+                                               {"input", std::move(input)},
+                                           }))
+                                           .runAsync())
+                                          .body);
     const auto& array = response["data"][0]["embedding"].asArray();
 
     std::valarray result(0.f, array.size());
-    for (const auto&[i, v] : array | ranges::view::enumerate) {
+    for (const auto& [i, v]: array | ranges::view::enumerate) {
         result[i] = v.asNumber();
     }
     co_return result;
