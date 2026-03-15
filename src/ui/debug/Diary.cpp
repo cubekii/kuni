@@ -26,6 +26,7 @@ namespace {
         AProperty<Diary> diary{APath("data/diary")};
         AProperty<AVector<Diary::EntryExAndRelatedness>> queriedEntries;
         AProperty<std::valarray<double>> queryEmbedding;
+        AProperty<AString> aiQueryResponse;
         AFuture<> async;
 
         State() {
@@ -35,9 +36,20 @@ namespace {
         }
 
         AFuture<> updateQueriedEntries() {
+            auto filter = [](const Diary::EntryEx& e) {
+                // if (e.id.startsWith("msg_")) {
+                //     return false;
+                // }
+                if (e.freeformBody.contains("<important_note")) {
+                    return false;
+                }
+                return true;
+            };
+            aiQueryResponse = "";
             queryEmbedding.raw = co_await OpenAIChat{}.embedding(query);
             queryEmbedding.notify();
-            queriedEntries = co_await diary.raw.query(queryEmbedding, { .confidenceFactor = 0.f });
+            queriedEntries = co_await diary.raw.query(queryEmbedding, { .confidenceFactor = 0.f, .filter = filter });
+            // aiQueryResponse = co_await diary.raw.queryAI(query, { .confidenceFactor = 0.f, .filter = filter });
         }
     };
 
@@ -129,10 +141,16 @@ _<AView> ui::debug::Diary::operator()() {
                 } AUI_OVERRIDE_STYLE { LayoutSpacing {4_dp } }).build() AUI_LET {
                     AObject::connect(AUI_REACT(state->query->empty() ? Visibility::VISIBLE : Visibility::GONE), AUI_SLOT(it)::setVisibility);
                 },
-                AScrollArea::Builder().withContents(
-                AUI_DECLARATIVE_FOR(i, *state->queriedEntries, AVerticalLayout) {
+                AScrollArea::Builder().withContents(Vertical {
+                    _new<AText>() AUI_LET {
+                        AObject::connect(AUI_REACT(state->aiQueryResponse), it, [&it = *it](const AString& s) {
+                            it.setString(s, {});
+                        });
+                    },
+                  AUI_DECLARATIVE_FOR(i, *state->queriedEntries, AVerticalLayout) {
                     return EntryView { .entry = *i.entry, .relatedness = i.relatedness };
-                } AUI_OVERRIDE_STYLE { LayoutSpacing {4_dp } }).build() AUI_LET {
+                  } AUI_OVERRIDE_STYLE { LayoutSpacing {4_dp } },
+                }).build() AUI_LET {
                     AObject::connect(AUI_REACT(!state->query->empty() ? Visibility::VISIBLE : Visibility::GONE), AUI_SLOT(it)::setVisibility);
                 },
             },

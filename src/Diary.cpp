@@ -61,6 +61,9 @@ AFuture<AVector<Diary::EntryExAndRelatedness>> Diary::query(const std::valarray<
     AVector<DiaryEntryExAndRelatednessF> relatednesses;
 
     for (auto it = mCachedDiary->begin(); it != mCachedDiary->end(); ++it) {
+        if (!opts.filter(*it)) {
+            continue;
+        }
         relatednesses << DiaryEntryExAndRelatednessF{
             .entry = it,
             .relatedness = entryIsRelated(query, *it, opts)
@@ -247,5 +250,32 @@ AFuture<> Diary::sleepingConsolidation() {
         }
     }
     reload();
+}
+
+AFuture<AString> Diary::queryAI(const AString& query, QueryOpts opts) {
+    OpenAIChat chat {
+        .systemPrompt = R"(
+You are a database searcher and summarizer.
+
+The user prompts a series of memory pieces separated by markdown line. Your job is to output data that fully satisfies
+user's query and would be helpful.
+
+Do not alter facts.
+
+Do not make up facts. Rely exclusively on provided context.
+)",
+    };
+    auto result = co_await this->query(co_await chat.embedding(query), std::move(opts));
+    AString body;
+    for (const auto&[i, relatedness] : result) {
+        body += i->freeformBody;
+        body += "\n\n---\n\n";
+        if (body.length() >= config::DIARY_INJECTION_MAX_LENGTH) {
+            break;
+        }
+    }
+    body += "\nQuery:\n";
+    body += query;
+    co_return (co_await chat.chat(body)).choices.at(0).message.content;
 }
 

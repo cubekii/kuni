@@ -162,6 +162,7 @@ public:
 
     struct QueryOpts {
         aui::float_within_0_1 confidenceFactor = 0.2f;
+        std::function<bool(const EntryEx&)> filter = [](const EntryEx&) { return true; };
     };
 
     /**
@@ -215,6 +216,8 @@ public:
      * Like person's sleeping
      */
     AFuture<> sleepingConsolidation();
+
+    AFuture<AString> queryAI(const AString& query, QueryOpts opts);
 
 private:
     /**
