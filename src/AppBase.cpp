@@ -99,15 +99,6 @@ AppBase::AppBase(APath workingDir): mDiary(workingDir / "diary"), mWakeupTimer(_
                 if (!self.mDiary.list().empty()) {
                     AString diary;
 
-                    auto pickup = [&](const Diary::EntryExAndRelatedness& i, AStringView tag = "your_diary_page") {
-                        i.entry->metadata.score += (i.relatedness - 0.5f) * 2.f;
-                        i.entry->incrementUsageCount();
-                        ALogger::info("AppBase") << "Loaded into context: " << i.entry->id << ".md relatedness=" << i.relatedness << "\n" << i.entry->freeformBody;
-                        auto formattedTag = "{} additional_context just_for_reasoning no_plagiarism no_copy"_format(tag);
-                        diary += "<{}>\n{}\n</{}>\n"_format(formattedTag, i.entry->freeformBody, formattedTag);
-                        self.mDiary.unload(i.entry);
-                    };
-
                     // performs scan on diary based on entire context.
                     // this will find common cues which are related to current conversation.
                     {
@@ -128,21 +119,7 @@ AppBase::AppBase(APath workingDir): mDiary(workingDir / "diary"), mWakeupTimer(_
                                 self.mRelevanceThreshold = relatedness;
                                 break;
                             }
-                            pickup(i);
-                        }
-                    }
-
-                    // address the last 1-2 entries from the temporary context.
-                    // this includes original notification or follow-up from tool responses (i.e., result of reading chat).
-                    // this helps switching between unrelated contexts.
-                    {
-                        auto query = co_await contextEmbedding(self.mTemporaryContext | ranges::view::take_last(2));
-                        auto relatednesses = co_await self.mDiary.query(query, {.confidenceFactor = 0.f});
-                        for (const auto& i : relatednesses) {
-                            if (diary.length() > config::DIARY_INJECTION_MAX_LENGTH) {
-                                break;
-                            }
-                            pickup(i);
+                            diary += self.takeDiaryEntry(i);
                         }
                     }
 
@@ -231,6 +208,7 @@ const AFuture<>& AppBase::passNotificationToAI(AString notification, OpenAITools
 }
 
 AFuture<> AppBase::diaryDumpMessages() {
+    mDiary.reload(); // will find plagiarism against all entries.
     AUI_DEFER { mDiary.reload(); };
     if (mTemporaryContext.empty()) {
         co_return;
@@ -326,4 +304,14 @@ void AppBase::removeNotifications(const AString& substring) {
         remaining.push(std::move(n));
     }
     mNotifications = std::move(remaining);
+}
+
+AString AppBase::takeDiaryEntry(const Diary::EntryExAndRelatedness& i) {
+    i.entry->metadata.score += (i.relatedness - 0.5f) * 2.f;
+    i.entry->incrementUsageCount();
+    ALogger::info("AppBase") << "Loaded into context: " << i.entry->id << ".md relatedness=" << i.relatedness << "\n" << i.entry->freeformBody;
+    auto formattedTag = "{} additional_context just_for_reasoning no_plagiarism no_copy"_format("your_diary_page");
+    AString result = "<{}>\n{}\n</{}>\n"_format(formattedTag, i.entry->freeformBody, formattedTag);
+    mDiary.unload(i.entry);
+    return result;
 }

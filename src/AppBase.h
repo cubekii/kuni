@@ -52,6 +52,21 @@ protected:
     AVector<OpenAIChat::Message> mTemporaryContext {};
 
 
+    /**
+     * @brief Performs needed adjustments to the diary page and removes the page from listing. Formatted contents are
+     * returned.
+     * @details
+     * Adjusts usage count, last used and score fields, according to relatedness.
+     *
+     * Format's with XML tag with needed attributes.
+     *
+     * The diary page with new metadata is dropped onto disk and removes from mDiary. This ensures this specific diary
+     * page wouldn't be considered and included again until mTemporary context is cleaned via diaryDumpMessages.
+     *
+     */
+    [[nodiscard]]
+    AString takeDiaryEntry(const Diary::EntryExAndRelatedness& i);
+
 private:
     struct Notification {
         AString message;
@@ -64,7 +79,6 @@ private:
     // OpenAITools mTools;
 
     Diary mDiary{"diary"};
-
 
 };
 

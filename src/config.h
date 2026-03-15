@@ -334,6 +334,7 @@ markdown lines `---`.
 For each sections include (freeform):
 - timestamps
 - source event (where it came from)
+- outcomes (i.e., an event was scheduled, bond development occurred, etc)
 - entities (people, objects, places, orgs) with canonical names
 - topics/tags
 - importance score (0–1) and rationale
@@ -341,6 +342,11 @@ For each sections include (freeform):
 - relationships (who-with-who)
 - retrieval cues (3–5 short phrases likely to be searched later)
 - similarities
+- always include important cues and messages so you won't forget them
+- fine-grained photo descriptions found in the context
+  - always mention found known entities (people, places) so you can recognize them in the future;
+    use canonical names as well.
+  - add context
 - contradictions/uncertainties
 </outputFormatting>
 

@@ -101,8 +101,8 @@ namespace {
                         .required = {"chat_id"},
                     },
                 .handler = [this](OpenAITools::Ctx ctx) -> AFuture<AString> {
-                    return llmuiOpenTelegramChat(
-                        ctx.tools, ctx.args["chat_id"].asLongIntOpt().valueOrException("chat_id integer is required"));
+                    auto chatId = ctx.args["chat_id"].asLongIntOpt().valueOrException("chat_id integer is required");
+                    return llmuiOpenTelegramChat(ctx.tools, chatId);
                 },
             });
         }
@@ -417,7 +417,7 @@ namespace {
                 } catch (...) {}
                 delete chat;
             });
-            AString result = "You opened the chat \"{}\" in Telegram. You see last messages:\n"_format(chat->title_);
+            AString result;
 
             AStringVector kuniMessages;
             td::td_api::array<td::td_api::object_ptr<td::td_api::message>> messages;
@@ -476,25 +476,45 @@ namespace {
 
                         // not sure if this is needed; i think LLM would be confused if <message> tag exists in both
                         // diary and current chat listing.
-                        auto msgReformatted = msgFormatted
-                            .replacedAll("<message", "<m")
-                            .replacedAll("</message", "</m")
-                            .replacedAll("unread", "")
-                        ;
-                        diary().save(Diary::EntryEx{
-                            .id = "msg_{}"_format(msg->id_),
-                            .metadata = {
-                                // confidence=1 means this is a fact and not LLM's AI slop.
-                                // sleep consolidator can't alter entries with confidence=1.
-                                .confidence = 1.f,
-                            },
-                            .freeformBody = std::move(msgReformatted),
-                        });
+                        //
+                        // currently disabled because it pollutes diary very quickly and according to kuni --debug,
+                        // its hard to find something meaningful; instead you get a bunch of messages
+                        //
+                        // auto msgReformatted = msgFormatted
+                        //     .replacedAll("<message", "<m")
+                        //     .replacedAll("</message", "</m")
+                        //     .replacedAll("unread", "")
+                        // ;
+                        // diary().save(Diary::EntryEx{
+                        //     .id = "msg_{}"_format(msg->id_),
+                        //     .metadata = {
+                        //         // confidence=1 means this is a fact and not LLM's AI slop.
+                        //         // sleep consolidator can't alter entries with confidence=1.
+                        //         .confidence = 1.f,
+                        //     },
+                        //     .freeformBody = std::move(msgReformatted),
+                        // });
                     }
                 }
 
                 mTelegram->sendQuery(
                     TelegramClient::toPtr(td::td_api::viewMessages(chatId, std::move(readMessages), nullptr, false)));
+
+
+                // address specifically read messages.
+                // this helps switching between unrelated contexts.
+                {
+                    const auto lengthBeforeInjection = result.length();
+                    auto query = co_await OpenAIChat{}.embedding(result);
+                    auto relatednesses = co_await diary().query(query, {.confidenceFactor = 0.f});
+                    for (const auto& i : relatednesses) {
+                        if ((result.length() - lengthBeforeInjection) > config::DIARY_INJECTION_MAX_LENGTH) {
+                            break;
+                        }
+                        result = takeDiaryEntry(i) + result;
+                    }
+                }
+                result = "You opened the chat \"{}\" in Telegram. You see last messages:\n"_format(chat->title_) + result;
 
                 switch (chat->type_->get_id()) {
                     case td::td_api::chatTypeSecret::ID:

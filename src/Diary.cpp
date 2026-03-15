@@ -15,6 +15,8 @@
 #include <range/v3/view/enumerate.hpp>
 #include <range/v3/view/transform.hpp>
 
+using namespace std::chrono_literals;
+
 Diary::Diary(APath diaryDir)
     : mDiaryDir(std::move(diaryDir)) {
     mDiaryDir.makeDirs();
@@ -168,7 +170,7 @@ AFuture<> Diary::sleepingConsolidation() {
             }
             auto asValue = std::move(*entry);
             mCachedDiary->erase(entry);
-            return *entry;
+            return asValue;
         }();
         if (target.metadata.embedding.size() == 0) {
             target.metadata.embedding = co_await OpenAIChat{}.embedding(target.freeformBody);
@@ -212,7 +214,15 @@ AFuture<> Diary::sleepingConsolidation() {
 
         naxyi:
         OpenAIChat chat { .systemPrompt = config::SLEEP_CONSOLIDATOR_PROMPT};
-        auto response = co_await chat.chat(std::move(body));
+
+        tryAgain2:
+        OpenAIChat::Response response;
+        try {
+            response = co_await chat.chat(std::move(body));
+        } catch (const AException& e) {
+            ALogger::err("Diary") << "sleepingConsolidation can't chat " << e;
+            goto tryAgain2;
+        }
 
         try {
             ALOG_DEBUG("Diary") << "Response: " << response.choices.at(0).message.content;
