@@ -101,8 +101,7 @@ AFuture<double> Diary::entryIsRelated(const std::valarray<double>& context, Entr
         co_return 1.0;
     }
     if (entry.metadata.embedding.size() != context.size()) {
-        OpenAIChat chat;
-        entry.metadata.embedding = co_await chat.embedding(entry.freeformBody);
+        entry.metadata.embedding = co_await OpenAIChat{.config = config::ENDPOINT_EMBEDDING}.embedding(entry.freeformBody);
         save(entry);
     }
     auto task = AUI_THREADPOOL_X [&] {
@@ -173,7 +172,7 @@ AFuture<> Diary::sleepingConsolidation() {
             return asValue;
         }();
         if (target.metadata.embedding.size() == 0) {
-            target.metadata.embedding = co_await OpenAIChat{}.embedding(target.freeformBody);
+            target.metadata.embedding = co_await OpenAIChat{.config = config::ENDPOINT_EMBEDDING}.embedding(target.freeformBody);
         }
         tryAgain:
         AVector<EntryExAndRelatedness> results;

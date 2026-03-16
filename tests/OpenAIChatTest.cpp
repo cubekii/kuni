@@ -215,7 +215,7 @@ TEST(OpenAIChat, Embeddings) {
     IEventLoop::Handle h(&loop);
     AAsyncHolder async;
     async << []() -> AFuture<> {
-        OpenAIChat session;
+        OpenAIChat session{.config = config::ENDPOINT_EMBEDDING};
         auto arcWarden = co_await session.embedding("Arc Warden");
         auto dota = co_await session.embedding("Dota");
         auto fart = co_await session.embedding("fart");

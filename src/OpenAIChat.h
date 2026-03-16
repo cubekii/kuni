@@ -9,8 +9,7 @@
 
 struct OpenAIChat {
     AString systemPrompt;
-    AString baseUrl =  "http://" AUI_PP_STRINGIZE(OPENAICHAT_ADDRESS) "/";
-    AString model = config::MODEL;
+    EndpointAndModel config = ::config::ENDPOINT_MAIN;
 
     AJson tools = AJson::Array{};
 
@@ -62,7 +61,7 @@ struct OpenAIChat {
     AFuture<Response> chat(AString message);
     AFuture<Response> chat(AVector<Message> messages);
 
-    AFuture<std::valarray<double>> embedding(AString input, AStringView embeddingModel = config::MODEL_EMBEDDING);
+    AFuture<std::valarray<double>> embedding(AString input);
 };
 
 template<>

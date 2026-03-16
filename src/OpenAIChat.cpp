@@ -125,7 +125,7 @@ AFuture<OpenAIChat::Response> OpenAIChat::chat(AVector<Message> messages) {
         {"stream", false},
         {"use_context", false},
         {"include_sources", true},
-        {"model", model},
+        {"model", config.model},
         {"tools", tools},
         {"temperature", config::TEMPERATURE},
     });
@@ -136,7 +136,7 @@ AFuture<OpenAIChat::Response> OpenAIChat::chat(AVector<Message> messages) {
     AFileOutputStream(logsDir / "{}.0query.json"_format(now)) << query.toStdString();
 
     ALOG_TRACE(LOG_TAG) << "Query: " << query;
-    auto response = AJson::fromBuffer((co_await ACurl::Builder(baseUrl + "v1/chat/completions")
+    auto response = AJson::fromBuffer((co_await ACurl::Builder(config.endpoint.baseUrl + "v1/chat/completions")
                                            .withMethod(ACurl::Method::HTTP_POST)
                                            .withTimeout(config::OPENAI_REQUEST_TIMEOUT)
                                            .withHeaders({"Content-Type: application/json"})
@@ -149,13 +149,13 @@ AFuture<OpenAIChat::Response> OpenAIChat::chat(AVector<Message> messages) {
     co_return aui::from_json<Response>(response);
 }
 
-AFuture<std::valarray<double>> OpenAIChat::embedding(AString input, AStringView embeddingModel) {
-    auto response = AJson::fromBuffer((co_await ACurl::Builder(baseUrl + "v1/embeddings")
+AFuture<std::valarray<double>> OpenAIChat::embedding(AString input) {
+    auto response = AJson::fromBuffer((co_await ACurl::Builder(config.endpoint.baseUrl + "v1/embeddings")
                                            .withMethod(ACurl::Method::HTTP_POST)
-                                           .withTimeout(4h)
+                                           .withTimeout(config::OPENAI_REQUEST_TIMEOUT)
                                            .withHeaders({"Content-Type: application/json"})
                                            .withBody(AJson::toString(AJson::Object{
-                                               {"model", embeddingModel},
+                                               {"model", config.model},
                                                {"input", std::move(input)},
                                            }))
                                            .runAsync())

@@ -32,7 +32,7 @@ AFuture<std::valarray<double>> contextEmbedding(ranges::range auto && rng) {
     for (const auto& message: rng) {
         basePrompt += message.content + "\n\n";
     }
-    OpenAIChat chat{};
+    OpenAIChat chat{.config = config::ENDPOINT_EMBEDDING};
     return chat.embedding(basePrompt);
 }
 
@@ -247,7 +247,7 @@ AFuture<> AppBase::diaryDumpMessages() {
         if (take.length() < 20) {
             continue; // random shit
         }
-        auto embedding = co_await chat.embedding(take);
+        auto embedding = co_await OpenAIChat{.config = config::ENDPOINT_EMBEDDING}.embedding(take);
         if (auto query = co_await mDiary.query(embedding, {.confidenceFactor = 0}); !query.empty()) {
             ALogger::info("AppBase") << "{}.md"_format(id) << ": plagiarism factor other_id=\"" << query.first().entry->id << "\" relatedness =" << float(query.first().relatedness);
             if (query.first().relatedness > config::DIARY_PLAGIARISM_THRESHOLD) {

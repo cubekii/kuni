@@ -50,7 +50,7 @@ namespace {
                 return true;
             };
             aiQueryResponse = "";
-            queryEmbedding.raw = co_await OpenAIChat{}.embedding(query);
+            queryEmbedding.raw = co_await OpenAIChat{.config = config::ENDPOINT_EMBEDDING}.embedding(query);
             queryEmbedding.notify();
             queriedEntries = co_await diary.raw.query(queryEmbedding, { .confidenceFactor = 0.f, .filter = filter });
             // aiQueryResponse = co_await diary.raw.queryAI(query, { .confidenceFactor = 0.f, .filter = filter });

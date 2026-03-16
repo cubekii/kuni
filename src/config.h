@@ -1,6 +1,8 @@
 #pragma once
 #include <chrono>
 
+#include "Endpoint.h"
+
 namespace config {
     static constexpr auto SYSTEM_PROMPT = R"(
 When asked for your name, you must respond with "Kuni".
@@ -295,14 +297,33 @@ reasonable event (notification) occurs.
 Use proper Markdown formatting in your answers.
 </outputFormatting>
 )";
-    // static constexpr auto MODEL = "gpt-oss-20b-128k:latest"; // норм но тупая
-    // static constexpr auto MODEL = "lfm2"; // не может вызвать тулы
-    static constexpr auto MODEL = "qwen3:14b";
-    // static constexpr auto MODEL = "qwen3.5:9b"; // более общительная и легкомысленная. реасонинг всё равно говно
-    // static constexpr auto MODEL = "magistral:latest"; // не вызывает тулы
 
-    static constexpr auto MODEL_PHOTO_TO_TEXT = "qwen3.5:9b";
-    static constexpr auto MODEL_EMBEDDING = "qwen3-embedding";
+    static const EndpointAndModel ENDPOINT_MAIN {
+        .endpoint = {
+            .baseUrl = "http://localhost:11434/",
+        },
+        .model = "qwen3:14b",
+
+        // .model = "gpt-oss-20b-128k:latest"; // норм но тупая
+        // .model = "lfm2"; // не может вызвать тулы
+        // .model = "qwen3.5:9b"; // более общительная и легкомысленная. реасонинг всё равно говно
+        // .model = "magistral:latest"; // не вызывает тулы
+    };
+
+    static const EndpointAndModel ENDPOINT_PHOTO_TO_TEXT {
+        .endpoint = {
+            .baseUrl = "http://localhost:11434/",
+        },
+        .model = "qwen3.5:9b",
+    };
+
+    static const EndpointAndModel ENDPOINT_EMBEDDING {
+        .endpoint = {
+            .baseUrl = "http://localhost:11434/",
+        },
+        .model = "qwen3-embedding",
+    };
+
     static constexpr auto PAPIK_CHAT_ID = 625207005;
 
     static constexpr auto DIARY_TOKEN_COUNT_TRIGGER = 20000;

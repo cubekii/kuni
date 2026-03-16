@@ -190,7 +190,7 @@ namespace {
             }
             OpenAIChat chat {
                 .systemPrompt = config::PHOTO_TO_TEXT_PROMPT,
-                .model = config::MODEL_PHOTO_TO_TEXT,
+                .config = config::ENDPOINT_PHOTO_TO_TEXT,
             };
             AString context = "<context>\n";
             for (const auto& i : temporaryContext()) {
@@ -505,7 +505,7 @@ namespace {
                 // this helps switching between unrelated contexts.
                 {
                     const auto lengthBeforeInjection = result.length();
-                    auto query = co_await OpenAIChat{}.embedding(result);
+                    auto query = co_await OpenAIChat{.config = config::ENDPOINT_EMBEDDING}.embedding(result);
                     auto relatednesses = co_await diary().query(query, {.confidenceFactor = 0.f});
                     for (const auto& i : relatednesses) {
                         if ((result.length() - lengthBeforeInjection) > config::DIARY_INJECTION_MAX_LENGTH) {
@@ -623,12 +623,12 @@ on them.
 
                         // verify that kuni does not repeat itself.
                         {
-                            auto target = co_await OpenAIChat{}.embedding(message);
+                            auto target = co_await OpenAIChat{.config = config::ENDPOINT_EMBEDDING}.embedding(message);
                             static AMap<AString, std::valarray<double>> embeddings;
                             for (const auto& i : kuniMessages) {
                                 auto& embedding = embeddings[i];
                                 if (embedding.size() != target.size()) {
-                                    embedding = co_await OpenAIChat{}.embedding(i);
+                                    embedding = co_await OpenAIChat{.config = config::ENDPOINT_EMBEDDING}.embedding(i);
                                 }
                                 const auto similiarity = util::cosine_similarity(target, embedding);
                                 if (similiarity > config::REPEAT_YOURSELF_TRIGGER) {
@@ -676,7 +676,7 @@ on them.
                         // just a freestanding function. sometimes LLM decides to check person's photo without an
                         // instruction!
                         auto image = co_await describePhoto(co_await fetchPhoto(chat->photo_->big_));
-                        co_return "<chat_photo chat_name=\"{}\">{}</chat_photo>"_format(chat->title_, image);
+                        co_return "<chat_photo chat_name=\"{}\">{}</chat_photo>\nThis is avatar photo of \"{}\". When referring to it, let the person know that you are referring to their avatar."_format(chat->title_, image, chat->title_);
                     },
                 },
             };

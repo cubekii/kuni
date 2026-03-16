@@ -170,11 +170,11 @@ TEST(Diary, Query) {
     diary.reload();
     async << [&]() -> AFuture<> {
         {
-            auto result = co_await diary.query(co_await OpenAIChat{}.embedding("crypto"), {});
+            auto result = co_await diary.query(co_await OpenAIChat{.config = config::ENDPOINT_EMBEDDING}.embedding("crypto"), {});
             EXPECT_TRUE(result.first().entry->freeformBody.contains("btc"));
         }
         {
-            auto result = co_await diary.query(co_await OpenAIChat{}.embedding("John"), {});
+            auto result = co_await diary.query(co_await OpenAIChat{.config = config::ENDPOINT_EMBEDDING}.embedding("John"), {});
             EXPECT_TRUE(result.last().entry->freeformBody.contains("btc"));
         }
     }();
