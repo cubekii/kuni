@@ -29,8 +29,17 @@ static constexpr auto LOG_TAG = "App";
 AFuture<std::valarray<double>> contextEmbedding(ranges::range auto && rng) {
     AString basePrompt;
     AUI_ASSERT(!ranges::empty(rng));
-    for (const auto& message: rng) {
-        basePrompt += message.content + "\n\n";
+    for (const OpenAIChat::Message& message: rng) {
+        if (!message.reasoning.empty()) {
+            basePrompt += message.reasoning;
+            basePrompt += "\n\n";
+        }
+        if (!message.reasoning_content.empty()) {
+            basePrompt += message.reasoning_content;
+            basePrompt += "\n\n";
+        }
+        basePrompt += message.content;
+        basePrompt += "\n\n---\n\n";
     }
     OpenAIChat chat{.config = config::ENDPOINT_EMBEDDING};
     return chat.embedding(basePrompt);

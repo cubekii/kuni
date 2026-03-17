@@ -1,5 +1,6 @@
 #pragma once
 #include <chrono>
+#include <secrets.h>
 
 #include "Endpoint.h"
 
@@ -300,9 +301,12 @@ Use proper Markdown formatting in your answers.
 
     static const EndpointAndModel ENDPOINT_MAIN {
         .endpoint = {
-            .baseUrl = "http://localhost:11434/",
+            .baseUrl = "http://localhost:11434/v1/",
+            // .baseUrl = "https://api.deepseek.com/",
+            // .bearerKey = secrets::DEEPSEEK_BEARER_KEY,
         },
         .model = "qwen3:14b",
+        // .model = "deepseek-reasoner",
 
         // .model = "gpt-oss-20b-128k:latest"; // норм но тупая
         // .model = "lfm2"; // не может вызвать тулы
@@ -312,14 +316,14 @@ Use proper Markdown formatting in your answers.
 
     static const EndpointAndModel ENDPOINT_PHOTO_TO_TEXT {
         .endpoint = {
-            .baseUrl = "http://localhost:11434/",
+            .baseUrl = "http://localhost:11434/v1/",
         },
         .model = "qwen3.5:9b",
     };
 
     static const EndpointAndModel ENDPOINT_EMBEDDING {
         .endpoint = {
-            .baseUrl = "http://localhost:11434/",
+            .baseUrl = "http://localhost:11434/v1/",
         },
         .model = "qwen3-embedding",
     };
@@ -357,6 +361,9 @@ For each sections include (freeform):
 - source event (where it came from)
 - outcomes (i.e., an event was scheduled, bond development occurred, etc)
 - entities (people, objects, places, orgs) with canonical names
+- key messages
+  - do not alter their content
+  - include enough context
 - topics/tags
 - importance score (0–1) and rationale
 - emotion/affect (valence/arousal)

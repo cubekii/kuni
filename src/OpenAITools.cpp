@@ -50,6 +50,7 @@ AFuture<AVector<OpenAIChat::Message>> OpenAITools::handleToolCalls(const AVector
 AJson OpenAITools::asJson() const {
     return ranges::view::transform(mHandlers, [](const auto& tool) {
         return AJson::Object{
+            {"type", tool.second.type },
             {"function", aui::to_json(tool.second) },
         };
     }) | ranges::to<AJson::Array>();

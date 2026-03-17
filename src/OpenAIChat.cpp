@@ -32,9 +32,11 @@ AJSON_FIELDS(OpenAIChat::Message::ToolCall,
              AJSON_FIELDS_ENTRY(id) AJSON_FIELDS_ENTRY(index) AJSON_FIELDS_ENTRY(type) AJSON_FIELDS_ENTRY(function))
 
 AJSON_FIELDS(OpenAIChat::Message,
-             AJSON_FIELDS_ENTRY(role)(content, "content", AJsonFieldFlags::OPTIONAL)(reasoning, "reasoning",
-                                                                                     AJsonFieldFlags::OPTIONAL)(
-                 tool_call_id, "tool_call_id", AJsonFieldFlags::OPTIONAL)(tool_calls, "tool_calls",
+             AJSON_FIELDS_ENTRY(role)
+             (content, "content", AJsonFieldFlags::OPTIONAL)
+             (reasoning, "reasoning", AJsonFieldFlags::OPTIONAL)
+             (reasoning_content, "reasoning_content", AJsonFieldFlags::OPTIONAL)
+             (tool_call_id, "tool_call_id", AJsonFieldFlags::OPTIONAL)(tool_calls, "tool_calls",
                                                                           AJsonFieldFlags::OPTIONAL))
 
 AJSON_FIELDS(OpenAIChat::Response::Choice,
@@ -136,10 +138,14 @@ AFuture<OpenAIChat::Response> OpenAIChat::chat(AVector<Message> messages) {
     AFileOutputStream(logsDir / "{}.0query.json"_format(now)) << query.toStdString();
 
     ALOG_TRACE(LOG_TAG) << "Query: " << query;
-    auto response = AJson::fromBuffer((co_await ACurl::Builder(config.endpoint.baseUrl + "v1/chat/completions")
+    AVector<AString> headers = {"Content-Type: application/json"};
+    if (!config.endpoint.bearerKey.empty()) {
+        headers << "Authorization: Bearer {}"_format(config.endpoint.bearerKey);
+    }
+    auto response = AJson::fromBuffer((co_await ACurl::Builder(config.endpoint.baseUrl + "chat/completions")
                                            .withMethod(ACurl::Method::HTTP_POST)
                                            .withTimeout(config::OPENAI_REQUEST_TIMEOUT)
-                                           .withHeaders({"Content-Type: application/json"})
+                                           .withHeaders(std::move(headers))
                                            .withBody(query.toStdString())
                                            .runAsync())
                                           .body);
@@ -150,10 +156,14 @@ AFuture<OpenAIChat::Response> OpenAIChat::chat(AVector<Message> messages) {
 }
 
 AFuture<std::valarray<double>> OpenAIChat::embedding(AString input) {
-    auto response = AJson::fromBuffer((co_await ACurl::Builder(config.endpoint.baseUrl + "v1/embeddings")
+    AVector<AString> headers = {"Content-Type: application/json"};
+    if (!config.endpoint.bearerKey.empty()) {
+        headers << "Authorization: Bearer {}"_format(config.endpoint.bearerKey);
+    }
+    auto response = AJson::fromBuffer((co_await ACurl::Builder(config.endpoint.baseUrl + "embeddings")
                                            .withMethod(ACurl::Method::HTTP_POST)
                                            .withTimeout(config::OPENAI_REQUEST_TIMEOUT)
-                                           .withHeaders({"Content-Type: application/json"})
+                                           .withHeaders(std::move(headers))
                                            .withBody(AJson::toString(AJson::Object{
                                                {"model", config.model},
                                                {"input", std::move(input)},

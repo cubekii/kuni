@@ -222,6 +222,11 @@ namespace {
                     auto sender =
                         co_await mTelegram->sendQueryWithResult(TelegramClient::toPtr(td::td_api::getUser(senderId)));
                     senderName = sender->first_name_ + " " + sender->last_name_;
+                    if (sender->usernames_) {
+                        if (!sender->usernames_->active_usernames_.empty()) {
+                            senderName += " (@" + sender->usernames_->active_usernames_.at(0) + ")";
+                        }
+                    }
                 } catch (const AException&) {}
                 if (senderName.empty()) {
                     try {
@@ -232,7 +237,7 @@ namespace {
                 }
             }
             checkForMaliciousPayloads(senderName);
-            AString formattedXmlTag = "{} message_id=\"{}\""_format(xmlTag, msg.id_);
+            AString formattedXmlTag = "{} message_id=\"{}\" date=\"{}\""_format(xmlTag, msg.id_, std::chrono::time_point<std::chrono::system_clock, std::chrono::seconds>(std::chrono::seconds(msg.date_)));
             if (chat.last_read_outbox_message_id_ < msg.id_) {
                 formattedXmlTag += " unread";
             }
@@ -436,8 +441,8 @@ namespace {
             mTelegram->sendQuery(TelegramClient::toPtr(td::td_api::openChat(chatId)));
             removeNotifications("<notification chat_id=\"{}\">\n"_format(chatId));
             auto chat = aui::ptr::manage_shared((co_await mTelegram->sendQueryWithResult(TelegramClient::toPtr(td::td_api::getChat(chatId)))).release(), [this, self = shared_from_this()](td::td_api::chat* chat) {
-                setOnline(false);
                 try {
+                    setOnline(false);
                     mTelegram->sendQuery(TelegramClient::toPtr(td::td_api::sendChatAction(chat->id_, {}, {}, nullptr)));
                     mTelegram->sendQuery(TelegramClient::toPtr(td::td_api::closeChat(chat->id_)));
                 } catch (...) {}
@@ -660,7 +665,7 @@ on them.
                                 if (similiarity > config::REPEAT_YOURSELF_TRIGGER) {
                                     ALogger::warn(LOG_TAG) << "LLM is repeating itself: " << message;
                                     // remove llm's request to send message; so it has no clue what did it sent
-                                    mTemporaryContext.pop_back();
+                                    // mTemporaryContext.pop_back();
                                     throw AException("You are repeating yourself. Please make another response.");
                                 }
                             }

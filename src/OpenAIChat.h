@@ -27,6 +27,7 @@ struct OpenAIChat {
         AString content;
         AString tool_call_id;
         AString reasoning;
+        AString reasoning_content; // deepseek requires this
         struct ToolCall {
             AString id;
             int64_t index;
