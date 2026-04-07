@@ -120,19 +120,25 @@ AString OpenAIChat::embedImage(AImageView image) {
 
 AFuture<OpenAIChat::Response> OpenAIChat::chat(AVector<Message> messages) {
     messages.insert(messages.begin(), {Message::Role::SYSTEM_PROMPT, systemPrompt});
-    auto query = AJson::toString({
-        {
-            "messages",
-            aui::to_json(messages),
-        },
-        {"max_tokens", maxTokens }, // hopefully helps with stuck prediction (infinite reasoning)
-        {"stream", false},
-        {"use_context", false},
-        {"include_sources", true},
-        {"model", config.model},
-        {"tools", tools},
-        {"temperature", config::TEMPERATURE},
-    });
+    auto query = AJson::toString([&] {
+        AJson json {
+            {
+              "messages",
+              aui::to_json(messages),
+            },
+            { "max_tokens", maxTokens },   // hopefully helps with stuck prediction (infinite reasoning)
+            { "stream", false },
+            { "use_context", false },
+            { "include_sources", true },
+            { "model", config.model },
+            { "tools", tools },
+            { "temperature", config::TEMPERATURE },
+        };
+        if (seed) {
+            json["seed"] = *seed;
+        }
+        return json;
+    }());
     AFileOutputStream("last_query.json") << query.toStdString();
     const auto logsDir = APath("logs");
     logsDir.makeDirs();

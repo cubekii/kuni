@@ -142,6 +142,7 @@ TEST(OpenAIChat, ImageRecognition) {
         OpenAIChat session{
             .systemPrompt = SYSTEM_PROMPT,
             .config = config::ENDPOINT_PHOTO_TO_TEXT,
+            .seed = 3,
         };
 
         AVector<OpenAIChat::Message> messages = {
@@ -153,6 +154,7 @@ TEST(OpenAIChat, ImageRecognition) {
         auto response = co_await session.chat(messages);
         EXPECT_FALSE(response.choices.empty());
         auto content = response.choices[0].message.content.lowercase();
+        ALogger::info("ImageRecognition") << "LLM response: " << content;
         EXPECT_TRUE(content.contains("cat")) << "\"cat\" should be mentioned: " << content;
     }();
 

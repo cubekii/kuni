@@ -11,6 +11,7 @@ struct OpenAIChat {
     AString systemPrompt;
     int maxTokens = 8192;
     EndpointAndModel config = ::config::ENDPOINT_MAIN;
+    AOptional<int64_t> seed;
 
     AJson tools = AJson::Array{};
 

@@ -78,14 +78,20 @@ namespace {
             AppBase::updateTools(actions);
             actions.insert({
                 .name = "take_photo",
-                .description = "Takes a photo by Kuni. This tool is useful for creating selfies, photos of surroundings, or any other images. "
-                               "The result of this tool is a photo description and a filename. "
-                               "The filename can then be sent to someone else using #send_telegram_message.",
+                .description = "Takes a photo by Kuni. This tool is useful for creating selfies, photos of "
+                                 "surroundings, or any other images. "
+                                 "The result of this tool is a photo description and a filename. "
+                                 "The filename can then be sent to someone else using #send_telegram_message.",
                 .parameters =
                     {
                         .properties =
                             {
-                                {"photo_desc", {.type = "string", .description = "Describes the image Kuni would like to achieve. Refer to yourself as Kuni. Avoid unnecessary details. Instead of specifying complex composition, prefer setting vibe of the image. Example: \"Kuni makes playful selfie\""}},
+                                {"photo_desc", {
+                                    .type = "string",
+                                    .description = "Describes the image Kuni would like to achieve. Refer to yourself "
+                                                    "as Kuni. Avoid unnecessary details. Instead of specifying complex "
+                                                    "composition, prefer setting vibe of the image. "
+                                                    "Example: \"Kuni makes playful selfie\"",}},
                             },
                         .required = {"photo_desc"},
                     },
@@ -237,6 +243,12 @@ namespace {
             OpenAIChat chat {
                 .systemPrompt = config::PHOTO_TO_TEXT_PROMPT,
                 .config = config::ENDPOINT_PHOTO_TO_TEXT,
+
+                // hardcode the seed for img-to-text.
+                // since LLM is asked to preserve image descriptions verbatim, this would hopefully help it to recognize
+                // same or similar pictures during lifetime.
+                // also this helps with caching on the server side.
+                .seed = 1,
             };
             AString context = "<context>\n";
             for (const auto& i : temporaryContext()) {
@@ -519,9 +531,9 @@ namespace {
                     }
                     fromMessage = response->messages_.back()->id_;
                     for (auto& msg: response->messages_) {
-#if AUI_DEBUG
+                        #if AUI_DEBUG
                         AUI_ASSERT(!ranges::any_of(messages, [&](const auto& m) { return m->id_ == msg->id_; }));
-#endif
+                        #endif
                         messages.push_back(std::move(msg));
                     }
                 }
