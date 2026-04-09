@@ -551,8 +551,7 @@ namespace {
                             chatId, fromMessage, 0, 5,
                             false)));
                     if (response->messages_.empty()) {
-                        result += "No messages found.";
-                        goto naxyi;
+                        break;
                     }
                     fromMessage = response->messages_.back()->id_;
                     for (auto& msg: response->messages_) {
@@ -564,6 +563,10 @@ namespace {
                 }
             }
             ALOG_DEBUG(LOG_TAG) << "Loaded " << messages.size() << " message(s)";
+            if (messages.empty()) {
+                result += "This chat is empty. Start a new conversation!"; // just like in real tg client
+                goto naxyi;
+            }
             {
                 td::td_api::array<td::td_api::int53> readMessages;
                 for (auto& msg: messages | ranges::view::reverse) {
