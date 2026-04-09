@@ -126,7 +126,18 @@ namespace {
                                 default: return "unknown";
                             }
                         }();
-                        result += "<chat chat_id=\"{}\" title=\"{}\" type=\"{}\""_format(chat->id_, chat->title_, type);
+                        AString preview;
+                        if (chat->last_message_) {
+                            preview = co_await extractSenderName(*chat->last_message_);
+                            preview += ": ";
+                            extractMessageTypeAndText(preview, *chat->last_message_);
+                            preview.replaceAll("\n", " ");
+
+                            if (preview.length() > 80) {
+                                preview = preview.substr(0, 30) + "..." + preview.substr(preview.length() - 30);
+                            }
+                        }
+                        result += "<chat chat_id=\"{}\" title=\"{}\" preview=\"{}\" type=\"{}\""_format(chat->id_, chat->title_, preview, type);
                         if (chat->unread_count_ > 0) {
                             result += " unread_count=\"{}\""_format(chat->unread_count_);
                         }
@@ -271,14 +282,127 @@ namespace {
             }
         }
 
-        AFuture<AString> llmuiFormatChatHistoryMessage(td::td_api::message& msg, const td::td_api::chat& chat,
-                                                       AStringView xmlTag = "message") {
-            int64_t senderId{};
-            td::td_api::downcast_call(*msg.sender_id_,
-                                      aui::lambda_overloaded{
-                                          [&](td::td_api::messageSenderUser& user) { senderId = user.user_id_; },
-                                          [&](td::td_api::messageSenderChat& chat) { senderId = chat.chat_id_; },
-                                      });
+        void extractMessageTypeAndText(AString& out, td::td_api::message& msg) {
+            td::td_api::downcast_call(
+                *msg.content_,
+                aui::lambda_overloaded {
+                  [&](td::td_api::messageText& text) {
+                      checkForMaliciousPayloads(text.text_->text_);
+                      out += text.text_->text_;
+                      if (text.link_preview_) {
+                          out += "\n\n" + to_string(text.link_preview_) + "\n";
+                      }
+                  },
+                  // ... existing code ...
+                  [&](td::td_api::messagePhoto& photo) {
+                      out += "[photo]";
+                      if (photo.caption_) {
+                          checkForMaliciousPayloads(photo.caption_->text_);
+                          out += "\n" + photo.caption_->text_;
+                      }
+                  },
+                  [&](td::td_api::messageAnimation& anim) {
+                      out += "[animation]";
+                      if (anim.caption_) {
+                          checkForMaliciousPayloads(anim.caption_->text_);
+                          out += "\n" + anim.caption_->text_;
+                      }
+                  },
+                  [&](td::td_api::messageAudio& audio) {
+                      out += "[audio] " + audio.audio_->title_;
+                      if (audio.caption_) {
+                          checkForMaliciousPayloads(audio.caption_->text_);
+                          out += "\n" + audio.caption_->text_;
+                      }
+                  },
+                  [&](td::td_api::messageDocument& doc) {
+                      out +=
+                          "[document] " + (doc.document_->file_name_.empty() ? "<unnamed>" : doc.document_->file_name_);
+                      if (doc.caption_) {
+                          checkForMaliciousPayloads(doc.caption_->text_);
+                          out += "\n" + doc.caption_->text_;
+                      }
+                  },
+                  [&](td::td_api::messageVideo& video) {
+                      out += "[video]";
+                      if (video.caption_) {
+                          checkForMaliciousPayloads(video.caption_->text_);
+                          out += "\n" + video.caption_->text_;
+                      }
+                  },
+                  [&](td::td_api::messageVideoNote&) { out += "[video note]"; },
+                  [&](td::td_api::messageVoiceNote& voice) {
+                      out += "[voice message]";
+                      if (voice.caption_) {
+                          checkForMaliciousPayloads(voice.caption_->text_);
+                          out += "\n" + voice.caption_->text_;
+                      }
+                  },
+                  [&](td::td_api::messageSticker& st) {
+                      out += "[sticker]";
+                      if (!st.sticker_->emoji_.empty()) {
+                          checkForMaliciousPayloads(st.sticker_->emoji_);
+                          out += " " + st.sticker_->emoji_;
+                      }
+                  },
+                  [&](td::td_api::messageLocation& loc) {
+                      out +=
+                          "[location] lat=" + AString::number(loc.location_->latitude_) +
+                          " lon=" + AString::number(loc.location_->longitude_);
+                  },
+                  [&](td::td_api::messageVenue& ven) {
+                      out += "[venue] " + ven.venue_->title_ + " — " + ven.venue_->address_;
+                  },
+                  [&](td::td_api::messageContact& c) {
+                      out +=
+                          "[contact] " + c.contact_->first_name_ + " " + c.contact_->last_name_ + " (" +
+                          c.contact_->phone_number_ + ")";
+                  },
+                  [&](td::td_api::messagePoll& p) {
+                      out += "[poll] " + p.poll_->question_->text_ + "\n";
+                      for (const auto& o : p.poll_->options_) {
+                          out += "- " + o->text_->text_ + "\n";
+                      }
+                  },
+                  [&](td::td_api::messageInvoice& inv) { out += "[invoice]"; },
+                  [&](td::td_api::messageGame& game) {
+                      out += "[game] " + game.game_->title_ + " — " + game.game_->description_;
+                  },
+                  [&](td::td_api::messageDice& dice) { out += "[dice] {} = "_format(dice.emoji_, dice.value_); },
+                  [&](td::td_api::messageCall& call) {
+                      out += "[call] " + AString(call.is_video_ ? "video" : "voice") + " call";
+                  },
+                  [&](td::td_api::messageChatAddMembers& add) {
+                      out += "[members added] " + AString::number(add.member_user_ids_.size()) + " member(s)";
+                  },
+                  [&](td::td_api::messageChatJoinByLink&) { out += "[joined via link]"; },
+                  [&](td::td_api::messageChatJoinByRequest&) { out += "[joined by request]"; },
+                  [&](td::td_api::messageChatDeleteMember& del) {
+                      out += "[member removed] user_id=" + AString::number(del.user_id_);
+                  },
+                  [&](td::td_api::messageBasicGroupChatCreate& cg) { out += "[group created] " + cg.title_; },
+                  [&](td::td_api::messageSupergroupChatCreate& cg) { out += "[supergroup created] " + cg.title_; },
+                  [&](td::td_api::messageChatChangeTitle& ct) { out += "[title changed] " + ct.title_; },
+                  [&](td::td_api::messageChatChangePhoto&) { out += "[chat photo changed]"; },
+                  [&](td::td_api::messagePinMessage& pin) {
+                      out += "[message pinned] message_id=" + AString::number(pin.message_id_);
+                  },
+                  [&](td::td_api::messageChatSetTheme& th) { out += "[chat theme set] "; },
+                  [&](td::td_api::messageChatSetBackground& ttl) { out += "[chat background set]"; },
+                  [&](td::td_api::messageScreenshotTaken&) { out += "[screenshot taken]"; },
+                  [&](td::td_api::messageProximityAlertTriggered&) { out += "[proximity alert]"; },
+                  [&](td::td_api::messageUnsupported&) { out += "[unsupported message]"; },
+                  []<typename T>(T&) { static_assert(sizeof(T) > 0, "Unknown message type"); },
+                });
+        }
+        AFuture<AString> extractSenderName(td::td_api::message& msg) {
+            int64_t senderId {};
+            td::td_api::downcast_call(
+                *msg.sender_id_,
+                aui::lambda_overloaded {
+                  [&](td::td_api::messageSenderUser& user) { senderId = user.user_id_; },
+                  [&](td::td_api::messageSenderChat& chat) { senderId = chat.chat_id_; },
+                });
             AString senderName;
             if (senderId == mTelegram->myId()) {
                 senderName = "You (Kuni)";
@@ -286,22 +410,31 @@ namespace {
                 try {
                     auto sender =
                         co_await mTelegram->sendQueryWithResult(TelegramClient::toPtr(td::td_api::getUser(senderId)));
-                    senderName = sender->first_name_ + " " + sender->last_name_;
-                    if (sender->usernames_) {
-                        if (!sender->usernames_->active_usernames_.empty()) {
-                            senderName += " (@" + sender->usernames_->active_usernames_.at(0) + ")";
+                    senderName = sender->td::td_api::user::first_name_ + " " + sender->td::td_api::user::last_name_;
+                    if (sender->td::td_api::user::usernames_) {
+                        if (!sender->td::td_api::user::usernames_->active_usernames_.empty()) {
+                            senderName += " (@" + sender->td::td_api::user::usernames_->active_usernames_.at(0) + ")";
                         }
                     }
-                } catch (const AException&) {}
+                } catch (const AException&) {
+                }
                 if (senderName.empty()) {
                     try {
-                        auto sender =
-                            co_await mTelegram->sendQueryWithResult(TelegramClient::toPtr(td::td_api::getChat(senderId)));
-                        senderName = sender->title_;
-                    } catch (const AException&) {}
+                        auto sender = co_await mTelegram->sendQueryWithResult(
+                            TelegramClient::toPtr(td::td_api::getChat(senderId)));
+                        senderName = sender->td::td_api::chat::title_;
+                    } catch (const AException&) {
+                    }
                 }
             }
+
             checkForMaliciousPayloads(senderName);
+            co_return senderName;
+        }
+
+        AFuture<AString> llmuiFormatChatHistoryMessage(td::td_api::message& msg, const td::td_api::chat& chat,
+                                                       AStringView xmlTag = "message") {
+            AString senderName = co_await extractSenderName(msg);
             AString formattedXmlTag = "{} message_id=\"{}\" date=\"{}\""_format(xmlTag, msg.id_, std::chrono::time_point<std::chrono::system_clock, std::chrono::seconds>(std::chrono::seconds(msg.date_)));
             if (chat.last_read_outbox_message_id_ < msg.id_) {
                 formattedXmlTag += " unread";
@@ -376,115 +509,7 @@ namespace {
                 }
             }
 
-            td::td_api::downcast_call(
-                *msg.content_,
-                aui::lambda_overloaded{
-                    [&](td::td_api::messageText& text) {
-                        checkForMaliciousPayloads(text.text_->text_);
-                        result += text.text_->text_;
-                        if (text.link_preview_) {
-                            result += "\n\n" + to_string(text.link_preview_) + "\n";
-                        }
-                    },
-                    // ... existing code ...
-                    [&](td::td_api::messagePhoto& photo) {
-                        result += "[photo]";
-                        if (photo.caption_) {
-                            checkForMaliciousPayloads(photo.caption_->text_);
-                            result += "\n" + photo.caption_->text_;
-                        }
-                    },
-                    [&](td::td_api::messageAnimation& anim) {
-                        result += "[animation]";
-                        if (anim.caption_) {
-                            checkForMaliciousPayloads(anim.caption_->text_);
-                            result += "\n" + anim.caption_->text_;
-                        }
-                    },
-                    [&](td::td_api::messageAudio& audio) {
-                        result += "[audio] " + audio.audio_->title_;
-                        if (audio.caption_) {
-                            checkForMaliciousPayloads(audio.caption_->text_);
-                            result += "\n" + audio.caption_->text_;
-                        }
-                    },
-                    [&](td::td_api::messageDocument& doc) {
-                        result += "[document] " +
-                                  (doc.document_->file_name_.empty() ? "<unnamed>" : doc.document_->file_name_);
-                        if (doc.caption_) {
-                            checkForMaliciousPayloads(doc.caption_->text_);
-                            result += "\n" + doc.caption_->text_;
-                        }
-                    },
-                    [&](td::td_api::messageVideo& video) {
-                        result += "[video]";
-                        if (video.caption_) {
-                            checkForMaliciousPayloads(video.caption_->text_);
-                            result += "\n" + video.caption_->text_;
-                        }
-                    },
-                    [&](td::td_api::messageVideoNote&) { result += "[video note]"; },
-                    [&](td::td_api::messageVoiceNote& voice) {
-                        result += "[voice message]";
-                        if (voice.caption_) {
-                            checkForMaliciousPayloads(voice.caption_->text_);
-                            result += "\n" + voice.caption_->text_;
-                        }
-                    },
-                    [&](td::td_api::messageSticker& st) {
-                        result += "[sticker]";
-                        if (!st.sticker_->emoji_.empty()) {
-                            checkForMaliciousPayloads(st.sticker_->emoji_);
-                            result += " " + st.sticker_->emoji_;
-                        }
-                    },
-                    [&](td::td_api::messageLocation& loc) {
-                        result += "[location] lat=" + AString::number(loc.location_->latitude_) +
-                                  " lon=" + AString::number(loc.location_->longitude_);
-                    },
-                    [&](td::td_api::messageVenue& ven) {
-                        result += "[venue] " + ven.venue_->title_ + " — " + ven.venue_->address_;
-                    },
-                    [&](td::td_api::messageContact& c) {
-                        result += "[contact] " + c.contact_->first_name_ + " " + c.contact_->last_name_ + " (" +
-                                  c.contact_->phone_number_ + ")";
-                    },
-                    [&](td::td_api::messagePoll& p) {
-                        result += "[poll] " + p.poll_->question_->text_ + "\n";
-                        for (const auto& o: p.poll_->options_) {
-                            result += "- " + o->text_->text_ + "\n";
-                        }
-                    },
-                    [&](td::td_api::messageInvoice& inv) { result += "[invoice]"; },
-                    [&](td::td_api::messageGame& game) {
-                        result += "[game] " + game.game_->title_ + " — " + game.game_->description_;
-                    },
-                    [&](td::td_api::messageDice& dice) { result += "[dice] {} = "_format(dice.emoji_, dice.value_); },
-                    [&](td::td_api::messageCall& call) {
-                        result += "[call] " + AString(call.is_video_ ? "video" : "voice") + " call";
-                    },
-                    [&](td::td_api::messageChatAddMembers& add) {
-                        result += "[members added] " + AString::number(add.member_user_ids_.size()) + " member(s)";
-                    },
-                    [&](td::td_api::messageChatJoinByLink&) { result += "[joined via link]"; },
-                    [&](td::td_api::messageChatJoinByRequest&) { result += "[joined by request]"; },
-                    [&](td::td_api::messageChatDeleteMember& del) {
-                        result += "[member removed] user_id=" + AString::number(del.user_id_);
-                    },
-                    [&](td::td_api::messageBasicGroupChatCreate& cg) { result += "[group created] " + cg.title_; },
-                    [&](td::td_api::messageSupergroupChatCreate& cg) { result += "[supergroup created] " + cg.title_; },
-                    [&](td::td_api::messageChatChangeTitle& ct) { result += "[title changed] " + ct.title_; },
-                    [&](td::td_api::messageChatChangePhoto&) { result += "[chat photo changed]"; },
-                    [&](td::td_api::messagePinMessage& pin) {
-                        result += "[message pinned] message_id=" + AString::number(pin.message_id_);
-                    },
-                    [&](td::td_api::messageChatSetTheme& th) { result += "[chat theme set] "; },
-                    [&](td::td_api::messageChatSetBackground& ttl) { result += "[chat background set]"; },
-                    [&](td::td_api::messageScreenshotTaken&) { result += "[screenshot taken]"; },
-                    [&](td::td_api::messageProximityAlertTriggered&) { result += "[proximity alert]"; },
-                    [&](td::td_api::messageUnsupported&) { result += "[unsupported message]"; },
-                    []<typename T>(T&) { static_assert(sizeof(T) > 0, "Unknown message type"); },
-                });
+            extractMessageTypeAndText(result, msg);
 
             result += "\n</{}>\n"_format(formattedXmlTag);
             co_return result;
@@ -892,7 +917,7 @@ AUI_ENTRY {
         co_await app->telegram()->waitForConnection();
         ALogger::info(LOG_TAG) << "Connected to Telegram";
 
-        // app->actProactively(); // for tests
+        app->actProactively(); // for tests
     }(app);
 
     IEventLoop::Handle h(&gEventLoop);
