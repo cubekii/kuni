@@ -43,6 +43,18 @@ struct OpenAIChat {
             } function;
         };
         AVector<ToolCall> tool_calls;
+
+        Message& operator+=(const Message& other) {
+            // for streaming
+            role = other.role;
+            content += other.content;
+            tool_call_id = other.tool_call_id;
+            reasoning += other.reasoning;
+            reasoning_content += other.reasoning_content;
+            tool_call_id = other.tool_call_id;
+            tool_calls << other.tool_calls;
+            return *this;
+        }
     };
 
     struct Response {

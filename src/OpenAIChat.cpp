@@ -229,11 +229,7 @@ _<OpenAIChat::StreamingResponse> OpenAIChat::chatStreaming(AVector<Message> mess
                 while (out->choices.size() <= choice.index) {
                     out->choices.emplace_back().index = out->choices.size();
                 }
-                auto& choiceOut = out->choices.at(choice.index);
-                choiceOut.message.role = choice.delta.role;
-                choiceOut.message.content += choice.delta.content;
-                choiceOut.message.reasoning+= choice.delta.reasoning;
-                choiceOut.message.reasoning_content += choice.delta.reasoning_content;
+                out->choices.at(choice.index).message += choice.delta;
             }
         });
     };

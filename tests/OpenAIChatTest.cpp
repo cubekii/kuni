@@ -168,6 +168,65 @@ TEST(OpenAIChat, ToolUsage) {
     }
 }
 
+
+TEST(OpenAIChat, BasicStreamingToolCalls) {
+    AEventLoop loop;
+    IEventLoop::Handle h(&loop);
+    AAsyncHolder async;
+    async.setOnException([](const AException& e) {
+        ALogger::err("OpenAIChat") << e;
+        GTEST_NONFATAL_FAILURE_("caught exception");
+    });
+    async << []() -> AFuture<> {
+        bool toolCalled = false;
+        OpenAITools tools = {
+            {
+                .name = "get_time",
+                .description = "Retrieves the current time.",
+                .parameters = {
+                    .properties = {
+                            {"timezone", { .type = "string", .description = "The timezone to use for the time." }},
+                        },
+                    },
+                    .handler = [&](OpenAITools::Ctx json) -> AFuture<AString> {
+                        toolCalled = true;
+                        co_return "12:00 AM";
+                    },
+            }
+        };
+
+        AVector<OpenAIChat::Message> messages{
+            {OpenAIChat::Message::Role::USER, "Answer SHORTLY. What time is it? Do not make up information; if you don't have access to a tool, report it."}
+        };
+        OpenAIChat session{ .systemPrompt = SYSTEM_PROMPT, .config = config::ENDPOINT_CHEAP_LLM, .tools = tools.asJson() };
+        toolCalls:
+        auto streaming = session.chatStreaming(messages);
+        size_t callTimes = 0;
+        AObject::connect(streaming->response.changed, AObject::GENERIC_OBSERVER, [&callTimes, prevContent = _new<AString>()](const OpenAIChat::Response& m) {
+            EXPECT_EQ(m.choices.at(0).message.role, OpenAIChat::Message::Role::ASSISTANT);
+            if (!prevContent->empty()) {
+                EXPECT_TRUE(m.choices.at(0).message.content.startsWith(*prevContent)) << "Streaming response should contain previous content: " << m.choices.at(0).message.content;
+            }
+            *prevContent = m.choices.at(0).message.content;
+            callTimes++;
+        });
+        co_await streaming->completed;
+        const auto& response = streaming->response->choices.at(0).message;
+        messages << response;
+        if (!response.tool_calls.empty()) {
+            messages << co_await tools.handleToolCalls(response.tool_calls);
+            goto toolCalls;
+        }
+        EXPECT_TRUE(toolCalled);
+        EXPECT_GE(callTimes, 1) << "Should have at least one signal";
+        EXPECT_TRUE(response.content.contains("12:00")) << response.content;
+    }();
+
+    while (async.size() > 0) {
+        loop.iteration();
+    }
+}
+
 TEST(OpenAIChat, ImageRecognition) {
     AEventLoop loop;
     IEventLoop::Handle h(&loop);
