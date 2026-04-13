@@ -562,7 +562,7 @@ namespace {
                     }
                 }
             }
-            ALOG_DEBUG(LOG_TAG) << "Loaded " << messages.size() << " message(s)";
+            ALOG_DEBUG(LOG_TAG) << "Loaded " << messages.size() << " message(s): " << chat->title_;
             if (messages.empty()) {
                 result += "This chat is empty. Start a new conversation!"; // just like in real tg client
                 goto naxyi;
@@ -920,7 +920,7 @@ AUI_ENTRY {
         co_await app->telegram()->waitForConnection();
         ALogger::info(LOG_TAG) << "Connected to Telegram";
 
-        app->actProactively(); // for tests
+        // app->actProactively(); // for tests
     }(app);
 
     IEventLoop::Handle h(&gEventLoop);

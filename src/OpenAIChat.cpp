@@ -19,19 +19,26 @@
 #include "AUI/Reflect/AEnumerate.h"
 #include "AUI/Util/kAUI.h"
 #include "config.h"
+#include "AUI/IO/AByteBufferInputStream.h"
 
 static constexpr auto LOG_TAG = "OpenAIChat";
 
 using namespace std::chrono_literals;
 
 
-AJSON_FIELDS(OpenAIChat::Message::ToolCall::Function, AJSON_FIELDS_ENTRY(name) AJSON_FIELDS_ENTRY(arguments))
+AJSON_FIELDS(OpenAIChat::Message::ToolCall::Function,
+             (name, "name", AJsonFieldFlags::OPTIONAL)
+             (arguments, "arguments", AJsonFieldFlags::OPTIONAL)
+             )
 
 AJSON_FIELDS(OpenAIChat::Message::ToolCall,
-             AJSON_FIELDS_ENTRY(id) AJSON_FIELDS_ENTRY(index) AJSON_FIELDS_ENTRY(type) AJSON_FIELDS_ENTRY(function))
+             (id, "id", AJsonFieldFlags::OPTIONAL)
+             (type, "type", AJsonFieldFlags::OPTIONAL)
+             (function, "function", AJsonFieldFlags::OPTIONAL)
+             AJSON_FIELDS_ENTRY(index))
 
 AJSON_FIELDS(OpenAIChat::Message,
-             AJSON_FIELDS_ENTRY(role)
+             (role, "role", AJsonFieldFlags::OPTIONAL)
              (content, "content", AJsonFieldFlags::OPTIONAL)
              (reasoning, "reasoning", AJsonFieldFlags::OPTIONAL)
              (reasoning_content, "reasoning_content", AJsonFieldFlags::OPTIONAL)
@@ -191,11 +198,11 @@ AFuture<OpenAIChat::Response> OpenAIChat::chat(AVector<Message> messages) {
     }
     AFileOutputStream("last_response.json") << response;
     AFileOutputStream(logsDir / "{}.1response.json"_format(now)) << response;
-    ALOG_TRACE(LOG_TAG) << "Response: " << AJson::toString(response);
+    ALOG_DEBUG(LOG_TAG) << "Response: " << AJson::toString(response).replaceAll("\\n", "\n");
     auto responseResult = aui::from_json<Response>(response);
-    if (!responseResult.choices.empty() && !ALogger::global().isTrace()) {
-        ALOG_DEBUG(LOG_TAG) << "Response reasoning: " << responseResult.choices.at(0).message.reasoning_content << responseResult.choices.at(0).message.reasoning;
-    }
+    // if (!responseResult.choices.empty() && !ALogger::global().isTrace()) {
+    //     ALOG_DEBUG(LOG_TAG) << "Response reasoning: " << responseResult.choices.at(0).message.reasoning_content << responseResult.choices.at(0).message.reasoning;
+    // }
     co_return responseResult;
 }
 _<OpenAIChat::StreamingResponse> OpenAIChat::chatStreaming(AVector<Message> messages) {
@@ -225,7 +232,8 @@ _<OpenAIChat::StreamingResponse> OpenAIChat::chatStreaming(AVector<Message> mess
             out->created = response.created;
             out->model = response.model;
             out->system_fingerprint = response.system_fingerprint;
-            for (const auto& choice: response.choices) {
+            for (auto& choice: response.choices) {
+                choice.delta.role = Message::Role::ASSISTANT;
                 while (out->choices.size() <= choice.index) {
                     out->choices.emplace_back().index = out->choices.size();
                 }
@@ -240,27 +248,27 @@ _<OpenAIChat::StreamingResponse> OpenAIChat::chatStreaming(AVector<Message> mess
                                                .withTimeout(config::REQUEST_TIMEOUT)
                                                .withHeaders(std::move(headers))
                                                .withBody(query.toStdString())
-                                               .withWriteCallback([=](AByteBufferView piece) -> size_t {
+                                               .withWriteCallback([=](AByteBufferView buffer) -> size_t {
+                                                   ALOG_DEBUG(LOG_TAG) << "QueryStreaming piece " << buffer.toStdStringView();
+                                                   size_t bytesRead = 0;
                                                    try {
-                                                       AStringView asString(piece.toStdStringView());
-                                                       ALOG_DEBUG(LOG_TAG) << "QueryStreaming piece " << asString;
-                                                       if (asString.length() <= 6) {
-                                                           return 0;
+                                                       for (const auto& piece : AStringView(buffer.toStdStringView()).split("\n\n")) {
+                                                           auto slice = piece;
+                                                           if (slice.length() <= 6) {
+                                                               break;
+                                                           }
+                                                           if (!slice.startsWith("data: ")) {
+                                                               throw AException("Expected 'data:' prefix");
+                                                           }
+                                                           slice = slice.substr(6);
+                                                           if (slice.startsWith("[DONE]")) {
+                                                               return buffer.size();
+                                                           }
+                                                           processJson(AJson::fromString(slice));
+                                                           bytesRead += piece.bytes().length() + 2;
                                                        }
-                                                       if (!asString.startsWith("data: ")) {
-                                                           throw AException("Expected 'data:' prefix");
-                                                       }
-                                                       asString = asString.substr(6);
-                                                       if (asString.startsWith("[DONE]")) {
-                                                           return piece.size();
-                                                       }
-                                                       processJson(AJson::fromString(asString));
-
-                                                       return piece.size();
-                                                   } catch (const AEOFException&) {
-                                                       return 0;
-                                                   }
-
+                                                   } catch (const AEOFException&) {}
+                                                   return bytesRead;
                                                })
                                                .runAsync();
     }();

@@ -143,6 +143,7 @@ TEST(OpenAIChat, ToolUsage) {
 
         OpenAIChat session{
             .systemPrompt = SYSTEM_PROMPT,
+            .config = config::ENDPOINT_CHEAP_LLM,
             .tools = tools.asJson(),
         };
 
@@ -198,7 +199,11 @@ TEST(OpenAIChat, BasicStreamingToolCalls) {
         AVector<OpenAIChat::Message> messages{
             {OpenAIChat::Message::Role::USER, "Answer SHORTLY. What time is it? Do not make up information; if you don't have access to a tool, report it."}
         };
-        OpenAIChat session{ .systemPrompt = SYSTEM_PROMPT, .config = config::ENDPOINT_CHEAP_LLM, .tools = tools.asJson() };
+        OpenAIChat session {
+            .systemPrompt = SYSTEM_PROMPT,
+            .config = config::ENDPOINT_CHEAP_LLM,
+            .tools = tools.asJson(),
+        };
         toolCalls:
         auto streaming = session.chatStreaming(messages);
         size_t callTimes = 0;
@@ -268,7 +273,7 @@ TEST(OpenAIChat, ToolAttachments) {
                 .name = "open_attachment",
                 .description = "Retrieves attachment.",
                 .handler = [](OpenAITools::Ctx json) -> AFuture<AString> {
-                    co_return "12:00 AM";
+                    co_return OpenAIChat::embedImage(*AImage::fromFile(TEST_DATA / "sussybaka.jpg") );
                 },
             }
         };

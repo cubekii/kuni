@@ -41,6 +41,15 @@ struct OpenAIChat {
                 AString name;
                 AString arguments;
             } function;
+
+            ToolCall& operator+=(const ToolCall& other) {
+                id += other.id;
+                index = other.index;
+                type += other.type;
+                function.name += other.function.name;
+                function.arguments += other.function.arguments;
+                return *this;
+            }
         };
         AVector<ToolCall> tool_calls;
 
@@ -51,8 +60,13 @@ struct OpenAIChat {
             tool_call_id = other.tool_call_id;
             reasoning += other.reasoning;
             reasoning_content += other.reasoning_content;
-            tool_call_id = other.tool_call_id;
-            tool_calls << other.tool_calls;
+
+            for (const auto& toolCall : other.tool_calls) {
+                while (tool_calls.size() <= toolCall.index) {
+                    tool_calls.emplace_back();
+                }
+                tool_calls[toolCall.index] += toolCall;
+            }
             return *this;
         }
     };

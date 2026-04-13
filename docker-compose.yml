@@ -1,6 +1,6 @@
 services:
   ollama:
-    image: ollama/ollama:0.17.6
+    image: ollama/ollama:0.20.6
     volumes:
       - ./bin/ollama:/root/.ollama
       - ./ollama_setup.sh:/ollama_setup.sh

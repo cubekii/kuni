@@ -80,7 +80,7 @@ AppBase::AppBase(APath workingDir): mDiary(workingDir / "diary"), mWakeupTimer(_
         // co_await self.mDiary.sleepingConsolidation();
         for (;;) {
             {
-                if (std::uniform_real_distribution(0.0, 1.0)(re) < 0.2) {
+                if (std::uniform_real_distribution(0.0, 1.0)(re) < 0.1) {
                     // 1. randomly go afk is humane
                     // 2. reduce resource usage:
                     //    - less conversations would be made
