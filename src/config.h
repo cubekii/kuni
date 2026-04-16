@@ -362,6 +362,14 @@ world) in the following format:
     };
 
 
+    static const EndpointAndModel ENDPOINT_SLEEPING {
+        .endpoint = {
+            .baseUrl = "http://localhost:11434/v1/",
+        },
+        .model = "gemma4:26b",
+    };
+
+
     static const EndpointAndModel ENDPOINT_CHEAP_LLM {
         .endpoint = {
             .baseUrl = "http://localhost:11434/v1/",
@@ -388,7 +396,7 @@ world) in the following format:
     static constexpr auto DIARY_TOKEN_COUNT_TRIGGER = 20000;
     static constexpr auto DIARY_AVERAGE_ENTRY_SIZE = 1000;
     static constexpr auto DIARY_INJECTION_MAX_LENGTH = DIARY_AVERAGE_ENTRY_SIZE * 5;
-    static constexpr auto DIARY_SLEEP_MAX_LENGTH = DIARY_AVERAGE_ENTRY_SIZE * 50;
+    static constexpr auto DIARY_SLEEP_MAX_LENGTH = DIARY_AVERAGE_ENTRY_SIZE * 40;
     static constexpr auto DIARY_PLAGIARISM_THRESHOLD = 0.97f;
     static constexpr auto DIARY_MIN_RELATEDNESS = 0.8f;
 

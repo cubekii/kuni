@@ -154,152 +154,158 @@ AFuture<> Diary::sleepingConsolidation() {
 
     static std::default_random_engine re(std::time(nullptr));
     // reload();
-    mCachedDiary = parse(read(mDiaryDir))
-        | ranges::to_vector
-        | ranges::action::sort([](const EntryEx& a, const EntryEx& b) {
-            return a.id > b.id; // recent first, old last
-        })
-        | ranges::to<std::list<EntryEx>>;
+    for (;;) {
+        mCachedDiary = parse(read(mDiaryDir))
+            | ranges::to_vector
+            | ranges::action::sort([](const EntryEx& a, const EntryEx& b) {
+                return a.id > b.id; // recent first, old last
+            })
+            | ranges::to<std::list<EntryEx>>;
 
-    auto id = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-    const auto count = mCachedDiary->size();
-    const auto sleepStartTime = std::chrono::steady_clock::now();
-    while (!mCachedDiary->empty()) { // we'll remove considered diary entries from mCachedDiary and save them to disk.
-        if (std::chrono::steady_clock::now() - sleepStartTime >= config::SLEEP_MAX_TIME) {
-            // we reached sleep max time.
-            // how many memory pieces did we cover? this depends on LLM's processing speed.
-            // both cloud deepseek-chat and (qwen3.5:9b on a RTX4090) can process about 500 Kuni's diary entries per
-            // hour.
-            // anyway, we don't need to process all entries, neither human brain does.
-            // this also means our algorithm does not require memory decay (i.e., deleting old unrelevant entries).
-            // Kuni will remember everything, but they would not spend LLMs processing power on reflecting about
-            // same shit everytime.
-            // there's a small chance Kuni will remember old stuff, see below.
-            break;
-        }
+        auto id = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        const auto count = mCachedDiary->size();
+        const auto sleepStartTime = std::chrono::steady_clock::now();
+        while (!mCachedDiary->empty()) { // we'll remove considered diary entries from mCachedDiary and save them to disk.
+            if (std::chrono::steady_clock::now() - sleepStartTime >= config::SLEEP_MAX_TIME) {
+                // we reached sleep max time.
+                // how many memory pieces did we cover? this depends on LLM's processing speed.
+                // both cloud deepseek-chat and (qwen3.5:9b on a RTX4090) can process about 500 Kuni's diary entries per
+                // hour.
+                // anyway, we don't need to process all entries, neither human brain does.
+                // this also means our algorithm does not require memory decay (i.e., deleting old unrelevant entries).
+                // Kuni will remember everything, but they would not spend LLMs processing power on reflecting about
+                // same shit everytime.
+                // there's a small chance Kuni will remember old stuff, see below.
+                goto reachedMaxSleepTime;
+            }
 
-        auto target = [&] {
-            // during your sleep its likely you see the past couple of days. however, have you encountered
-            // some random shit from 2 years ago were you screwed up on a party? the random condition emulates exactly
-            // this
-            if (std::uniform_real_distribution<>(0.0, 1.0)(re) < 0.8) [[likely]] {
-                // likely branch.
-                // we will pick up the most recent target.
-                // also, LLM really likes to write new entries that mostly duplicate contents of those that were loaded
-                // into its context via RAG from context's embedding; AFAIK new details or reflections were added.
-                // maybe it's not a bad thing; considering the fact that below we will find related entries as well
-                // and mix them together.
+            auto target = [&] {
+                // during your sleep its likely you see the past couple of days. however, have you encountered
+                // some random shit from 2 years ago were you screwed up on a party? the random condition emulates exactly
+                // this
+                if (std::uniform_real_distribution<>(0.0, 1.0)(re) < 0.8) [[likely]] {
+                    // likely branch.
+                    // we will pick up the most recent target.
+                    // also, LLM really likes to write new entries that mostly duplicate contents of those that were loaded
+                    // into its context via RAG from context's embedding; AFAIK new details or reflections were added.
+                    // maybe it's not a bad thing; considering the fact that below we will find related entries as well
+                    // and mix them together.
+                    auto entry = mCachedDiary->begin();
+                    auto asValue = std::move(*entry);
+                    mCachedDiary->erase(entry);
+                    return asValue;
+                }
+                // unlikely branch.
+                // pick a random target.
+                // in perspective, this gives more shuffled chunks, so each sleep consolidation slightly different chunks
+                // are compared.
+                // this gives uniform distribution of information and merging/splitting behavior.
+                auto idx = re() % mCachedDiary->size();
                 auto entry = mCachedDiary->begin();
+                while (idx--) {
+                    entry++;
+                }
                 auto asValue = std::move(*entry);
                 mCachedDiary->erase(entry);
                 return asValue;
+            }();
+            if (target.metadata.embedding.size() == 0) {
+                target.metadata.embedding = co_await OpenAIChat{.config = config::ENDPOINT_EMBEDDING}.embedding(target.freeformBody);
             }
-            // unlikely branch.
-            // pick a random target.
-            // in perspective, this gives more shuffled chunks, so each sleep consolidation slightly different chunks
-            // are compared.
-            // this gives uniform distribution of information and merging/splitting behavior.
-            auto idx = re() % mCachedDiary->size();
-            auto entry = mCachedDiary->begin();
-            while (idx--) {
-                entry++;
+            tryAgain:
+            AVector<EntryExAndRelatedness> results;
+            try {
+                results = co_await query(target.metadata.embedding, {.confidenceFactor = 0.f /* we need just embedding relatedness */});
+            } catch (const AException& e) {
+                ALogger::err("Diary") << "sleepingConsolidation can't query " << e;
+                goto tryAgain;
             }
-            auto asValue = std::move(*entry);
-            mCachedDiary->erase(entry);
-            return asValue;
-        }();
-        if (target.metadata.embedding.size() == 0) {
-            target.metadata.embedding = co_await OpenAIChat{.config = config::ENDPOINT_EMBEDDING}.embedding(target.freeformBody);
-        }
-        tryAgain:
-        AVector<EntryExAndRelatedness> results;
-        try {
-            results = co_await query(target.metadata.embedding, {.confidenceFactor = 0.f /* we need just embedding relatedness */});
-        } catch (const AException& e) {
-            ALogger::err("Diary") << "sleepingConsolidation can't query " << e;
-            goto tryAgain;
-        }
 
-        AStringVector ids;
-        AStringVector idsToRemove;
+            AStringVector ids;
+            AStringVector idsToRemove;
 
-        ids << target.id;
+            ids << target.id;
 
-        auto body = [&] {
-            AString body;
-            for (const auto&[i, entry] : results | ranges::view::enumerate) {
-                if (body.length() > config::DIARY_SLEEP_MAX_LENGTH && i >= 2) {
-                    break;
-                }
-                if (!body.empty()) {
-                    body += "\n\n---\n\n";
-                }
-                body += AJson::toString(aui::to_json(SleepingConsolidationMeta{
-                    .confidence = entry.entry->metadata.confidence,
-                }));
-                body += entry.entry->freeformBody;
-                body += "\n";
-                ids << entry.entry->id;
-                if (entry.entry->metadata.confidence < 0.9999999f) {
-                    idsToRemove << std::move(entry.entry->id);
-                }
-                mCachedDiary->erase(entry.entry);
-            }
-            return body;
-        }();
-        ALogger::info("Diary") << "[" << (count - mCachedDiary->size()) << "/" << count << "] sleepingConsolidation: " << ids;
-        ALOG_DEBUG("Diary") << "Prompt: " << body;
-
-        naxyi:
-        OpenAIChat chat { .systemPrompt = config::SLEEP_CONSOLIDATOR_PROMPT};
-
-        tryAgain2:
-        OpenAIChat::Response response;
-        try {
-            response = co_await chat.chat(body);
-        } catch (const AException& e) {
-            ALogger::err("Diary") << "sleepingConsolidation can't chat " << e;
-            goto tryAgain2;
-        }
-
-        try {
-            ALOG_DEBUG("Diary") << "Response: " << response.choices.at(0).message.content;
-            for (const auto& entry : response.choices.at(0).message.content.split("\n---")) {
-                if (entry.length() < 10) {
-                    continue; // unknown shit
-                }
-                auto metadata = aui::from_json<SleepingConsolidationMeta>(AJson::fromString(entry));
-                auto freeformBody = AStringView(AStringView(entry).bytes().substr(entry.bytes().find("}") + 1));
-                freeformBody = freeformBody.trim('\n');
-
-                if (metadata.confidence < -0.99999f) {
-                    // drop.
-                    continue;
-                }
-
-                // IMPORTANT CONSIDERATION: we'll delete old entries, replacing them with the newer ones. this will
-                // effectively update their ids, thus, during next sleep, they will appear again closer to the beginning
-                // of the processing queue.
-                // this algorithm encourages to keep in mind the most recent events and reflect on them specifically.
-                save(EntryEx{
-                    .id = "{}"_format(id++),
-                    .metadata = {
-                        .confidence = glm::clamp(metadata.confidence, -0.99f, 0.99f),
-                    },
-                    .freeformBody = std::move(freeformBody),
-                });
-                for (const auto& id : idsToRemove) {
-                    auto file = mDiaryDir / "{}.md"_format(id);
-                    if (file.isRegularFileExists()) {
-                        file.removeFile();
+            auto body = [&] {
+                AString body;
+                for (const auto&[i, entry] : results | ranges::view::enumerate) {
+                    if (body.length() > config::DIARY_SLEEP_MAX_LENGTH && i >= 2) {
+                        break;
                     }
+                    if (!body.empty()) {
+                        body += "\n\n---\n\n";
+                    }
+                    body += AJson::toString(aui::to_json(SleepingConsolidationMeta{
+                        .confidence = entry.entry->metadata.confidence,
+                    }));
+                    body += entry.entry->freeformBody;
+                    body += "\n";
+                    ids << entry.entry->id;
+                    if (entry.entry->metadata.confidence < 0.9999999f) {
+                        idsToRemove << std::move(entry.entry->id);
+                    }
+                    mCachedDiary->erase(entry.entry);
                 }
+                return body;
+            }();
+            ALogger::info("Diary") << "[" << (count - mCachedDiary->size()) << "/" << count << "] sleepingConsolidation: " << ids;
+            ALOG_DEBUG("Diary") << "Prompt: " << body;
+
+            naxyi:
+            OpenAIChat chat { .systemPrompt = config::SLEEP_CONSOLIDATOR_PROMPT, .config = config::ENDPOINT_SLEEPING };
+
+            tryAgain2:
+            OpenAIChat::Response response;
+            try {
+                response = co_await chat.chat(body);
+            } catch (const AException& e) {
+                ALogger::err("Diary") << "sleepingConsolidation can't chat " << e;
+                goto tryAgain2;
             }
-        } catch (const AException& e) {
-            ALogger::err("Diary") << "sleepingConsolidation can't parse " << e;
-            goto naxyi;
+
+            try {
+                ALOG_DEBUG("Diary") << "Response: " << response.choices.at(0).message.content;
+                for (const auto& entry : response.choices.at(0).message.content.split("\n---")) {
+                    if (entry.length() < 10) {
+                        continue; // unknown shit
+                    }
+                    auto metadata = aui::from_json<SleepingConsolidationMeta>(AJson::fromString(entry));
+                    auto freeformBody = AStringView(AStringView(entry).bytes().substr(entry.bytes().find("}") + 1));
+                    freeformBody = freeformBody.trim('\n');
+
+                    if (metadata.confidence < -0.99999f) {
+                        // drop.
+                        continue;
+                    }
+
+                    // IMPORTANT CONSIDERATION: we'll delete old entries, replacing them with the newer ones. this will
+                    // effectively update their ids, thus, during next sleep, they will appear again closer to the beginning
+                    // of the processing queue.
+                    // this algorithm encourages to keep in mind the most recent events and reflect on them specifically.
+                    save(EntryEx{
+                        .id = "{}"_format(id++),
+                        .metadata = {
+                            .confidence = glm::clamp(metadata.confidence, -0.99f, 0.99f),
+                        },
+                        .freeformBody = std::move(freeformBody),
+                    });
+                }
+            } catch (const AException& e) {
+                ALogger::err("Diary") << "sleepingConsolidation can't parse " << e;
+                goto naxyi;
+            }
+
+	    // since we have written refined diary entries, we don't need
+	    // old ones.
+	    for (const auto& id : idsToRemove) {
+		auto file = mDiaryDir / "{}.md"_format(id);
+		if (file.isRegularFileExists()) {
+		    file.removeFile();
+		}
+	    }
         }
     }
+    reachedMaxSleepTime:
     reload();
 }
 

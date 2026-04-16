@@ -186,15 +186,25 @@ AFuture<OpenAIChat::Response> OpenAIChat::chat(AVector<Message> messages) {
     if (!config.endpoint.bearerKey.empty()) {
         headers << "Authorization: Bearer {}"_format(config.endpoint.bearerKey);
     }
+    tryAgain:
     auto response = AJson::fromBuffer((co_await ACurl::Builder(config.endpoint.baseUrl + "chat/completions")
                                            .withMethod(ACurl::Method::HTTP_POST)
                                            .withTimeout(config::REQUEST_TIMEOUT)
-                                           .withHeaders(std::move(headers))
+                                           .withHeaders(headers)
                                            .withBody(query.toStdString())
                                            .runAsync())
                                           .body);
     if (response.contains("error")) {
-        throw AException("Ollama error: " + AJson::toString(response["error"]));
+        auto message = AJson::toString(response["error"]);
+        if (message.contains("model failed to load, this may be due to resource limitations or an internal error")) {
+            // if vram is VERY low, ollama even fails to unload the previous model.
+            // in ollama_setup.sh, we set OLLAMA_KEEP_ALIVE=1m, so we will just wait the ollama to unload the model,
+            // then try again.
+            ALogger::warn(LOG_TAG) << "Ollama model failed to load, wait and retry...";
+            co_await AThread::asyncSleep(1min / 2);
+            goto tryAgain;
+        }
+        throw AException("Ollama error: " + message);
     }
     AFileOutputStream("last_response.json") << response;
     AFileOutputStream(logsDir / "{}.1response.json"_format(now)) << response;
@@ -281,19 +291,30 @@ AFuture<std::valarray<double>> OpenAIChat::embedding(AString input) {
     if (!config.endpoint.bearerKey.empty()) {
         headers << "Authorization: Bearer {}"_format(config.endpoint.bearerKey);
     }
+    tryAgain:
     auto response = AJson::fromBuffer((co_await ACurl::Builder(config.endpoint.baseUrl + "embeddings")
                                            .withMethod(ACurl::Method::HTTP_POST)
                                            .withTimeout(config::REQUEST_TIMEOUT)
-                                           .withHeaders(std::move(headers))
+                                           .withHeaders(headers)
                                            .withBody(AJson::toString(AJson::Object{
                                                {"model", config.model},
-                                               {"input", std::move(input)},
+                                               {"input", input},
                                            }))
                                            .runAsync())
                                           .body);
     if (response.contains("error")) {
-        throw AException("Ollama error: " + AJson::toString(response["error"]));
+        auto message = AJson::toString(response["error"]);
+        if (message.contains("model failed to load, this may be due to resource limitations or an internal error")) {
+            // if vram is VERY low, ollama even fails to unload the previous model.
+            // in ollama_setup.sh, we set OLLAMA_KEEP_ALIVE=1m, so we will just wait the ollama to unload the model,
+            // then try again.
+            ALogger::warn(LOG_TAG) << "Ollama model failed to load, wait and retry...";
+            co_await AThread::asyncSleep(1min / 2);
+            goto tryAgain;
+        }
+        throw AException("Ollama error: " + message);
     }
+
     const auto& array = response["data"][0]["embedding"].asArray();
 
     std::valarray result(0.0, array.size());

@@ -77,8 +77,9 @@ AppBase::AppBase(APath workingDir): mDiary(workingDir / "diary"), mWakeupTimer(_
     mWakeupTimer->start();
 
     mAsync << [](AppBase& self) -> AFuture<> {
-        // co_await self.mDiary.sleepingConsolidation();
+        co_await self.mDiary.sleepingConsolidation();
         for (;;) {
+#ifndef AUI_TESTS_MODULE
             {
                 if (std::uniform_real_distribution(0.0, 1.0)(re) < 0.1) {
                     // 1. randomly go afk is humane
@@ -90,6 +91,7 @@ AppBase::AppBase(APath workingDir): mDiary(workingDir / "diary"), mWakeupTimer(_
                     co_await AThread::asyncSleep(1min * minutes);
                 }
             }
+#endif
             AUI_ASSERT(AThread::current() == self.getThread());
             if (self.mNotifications.empty()) {
                 co_await self.mNotificationsSignal;
@@ -186,9 +188,33 @@ AppBase::AppBase(APath workingDir): mDiary(workingDir / "diary"), mWakeupTimer(_
                 if (botAnswer.choices.empty() || botAnswer.choices.at(0).message.tool_calls.empty()) {
                     // no tool calls.
                     if (!botAnswer.choices.empty()) {
-                        if (botAnswer.choices.at(0).message.content.contains("tool call #send_telegram_message")) {
-                            // the bot misused tool calls capabilities. try again lol.
-                            goto naxyi_populate_ctx;
+                        // guiderails to make LLM tool-centric.
+                        const auto& content = botAnswer.choices.at(0).message.content;
+                        if (content.contains("#send_telegram_message")) {
+                            // qwen3.5 bug: misused examples
+                            if (std::exchange(noopWarning, false)) {
+                                self.mTemporaryContext << OpenAIChat::Message{
+                                    .role = OpenAIChat::Message::Role::USER,
+                                    .content = "You should be tool-centric. Make sure you made tool calls. The message "
+                                    "you provided is not visible to anyone but you.",
+                                };
+                                goto naxyi_preserve_ctx;
+                            }
+                        }
+                        if (content.contains("<message") && content.contains("</message>")) {
+                            // gemma4 bug: does not perform tool calls, instead, replies with the following content
+                            // <message message_id=\"8759834210\" date=\"2026-04-16 01:56:10\" sender=\"You (Kuni)\">
+                            // Ой, и что же ты там читаешь? Надеюсь, только самое милое! 😼✨
+                            // </message>
+
+                            if (std::exchange(noopWarning, false)) {
+                                self.mTemporaryContext << OpenAIChat::Message{
+                                    .role = OpenAIChat::Message::Role::USER,
+                                    .content = "You should be tool-centric. Make sure you made tool calls. The message "
+                                    "you provided is not visible to anyone but you.",
+                                };
+                                goto naxyi_preserve_ctx;
+                            }
                         }
                     }
                     ALogger::info(LOG_TAG) << "toolCallHappened=" << toolCallsHappened << " noopWarning=" << noopWarning;
@@ -367,7 +393,21 @@ void AppBase::updateTools(OpenAITools& actions) {
         .handler = [this](OpenAITools::Ctx ctx) -> AFuture<AString> {
             auto query = ctx.args["query"].asStringOpt().valueOrException("\"query\" string is required");
             if (query.length() < 150) {
-                throw AException("too short query! provide more context!");
+                // Alex2772 16-04-2026:
+                // changed from throw AException to co_return.
+                // AException is a technical error and the engine would load additional diary entries
+                // based on embedding search, which LLM might mistakenly interpret as a success call to ask_diary,
+                // losing guiderail to provide more context.
+                // if we return the string as is, the engine would not include diary entries; so the llm
+                // will see a clean response guiding it to provide more context.
+                /* throw AException */ co_return (R"(error: too short query! please provide more context to ask_diary:
+- chat name (if any)
+- previous messages
+- sender's name
+- search cues
+- source event
+- everything else to populate query
+)");
             }
             co_return (co_await mDiary.queryAI(query, {.confidenceFactor = 0.f})) + "\nIf response above is dismissive, try rephrasing your query and include other details";
         },
