@@ -44,6 +44,14 @@ namespace {
 
     protected:
         AFuture<> telegramPostMessage(int64_t chatId, AString text, AOptional<_<AImage>> photo = std::nullopt) {
+            // Check lockdown mode - only allow PAPIK_CHAT_ID if lockdown is enabled
+            if constexpr (config::LOCKDOWN_MODE) {
+                if (chatId != config::PAPIK_CHAT_ID) {
+                    ALogger::err(LOG_TAG) << "Lockdown mode is enabled. You can only send messages to chat with ID {} (PAPIK_CHAT_ID)."_format(config::PAPIK_CHAT_ID);
+                    co_return;
+                }
+            }
+            
             co_await telegram()->sendQueryWithResult([&] {
                 auto msg = td::td_api::make_object<td::td_api::sendMessage>();
                 msg->chat_id_ = chatId;
@@ -118,6 +126,14 @@ namespace {
                     for (const auto& chatId: chats->chat_ids_) {
                         auto chat = co_await telegram()->sendQueryWithResult(
                             TelegramClient::toPtr(td::td_api::getChat(chatId)));
+                        
+                        // Skip non-PAPIK chats in lockdown mode
+                        if constexpr (config::LOCKDOWN_MODE) {
+                            if (chat->id_ != config::PAPIK_CHAT_ID) {
+                                continue;
+                            }
+                        }
+                        
                         auto type = [&]() -> AStringView {
                             switch (chat->type_->get_id()) {
                                 case td::td_api::chatTypePrivate::ID: return "direct messages";
@@ -160,7 +176,16 @@ namespace {
                     },
                 .handler = [this](OpenAITools::Ctx ctx) -> AFuture<AString> {
                     auto chatId = ctx.args["chat_id"].asLongIntOpt().valueOrException("chat_id integer is required");
-                    return llmuiOpenTelegramChat(ctx.tools, chatId);
+                    
+                    // Check lockdown mode - only allow PAPIK_CHAT_ID if lockdown is enabled
+                    if constexpr (config::LOCKDOWN_MODE) {
+                        if (chatId != config::PAPIK_CHAT_ID) {
+                            ALogger::err(LOG_TAG) << "Error: Lockdown mode is enabled. You can only open chat with ID {} (PAPIK_CHAT_ID)."_format(config::PAPIK_CHAT_ID);
+                            co_return "No such chat";
+                        }
+                    }
+                    
+                    co_return co_await llmuiOpenTelegramChat(ctx.tools, chatId);
                 },
             });
         }
@@ -186,6 +211,14 @@ namespace {
             }
             auto chat = co_await mTelegram->sendQueryWithResult(
                 td::td_api::make_object<td::td_api::getChat>(u.message_->chat_id_));
+            
+            // Check lockdown mode - only allow PAPIK_CHAT_ID if lockdown is enabled
+            if constexpr (config::LOCKDOWN_MODE) {
+                if (chat->id_ != config::PAPIK_CHAT_ID) {
+                    co_return;
+                }
+            }
+            
             if (chat->notification_settings_) {
                 if (chat->notification_settings_->mute_for_ > 0) {
                     co_return;
@@ -526,6 +559,14 @@ namespace {
         }
 
         AFuture<AString> llmuiOpenTelegramChat(OpenAITools& tools, int64_t chatId) {
+            // Check lockdown mode - only allow PAPIK_CHAT_ID if lockdown is enabled
+            if constexpr (config::LOCKDOWN_MODE) {
+                if (chatId != config::PAPIK_CHAT_ID) {
+                    ALogger::err(LOG_TAG) << "Error: Lockdown mode is enabled. You can only open chat with ID {} (PAPIK_CHAT_ID)."_format(config::PAPIK_CHAT_ID);
+                    co_return "No such chat";
+                }
+            }
+            
             co_await telegram()->waitForConnection();
             setOnline();
             mTelegram->sendQuery(TelegramClient::toPtr(td::td_api::openChat(chatId)));

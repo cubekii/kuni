@@ -340,18 +340,18 @@ world) in the following format:
 
     static const EndpointAndModel ENDPOINT_MAIN {
         .endpoint = {
-            .baseUrl = "http://localhost:11434/v1/",
-            // .baseUrl = "https://api.deepseek.com/",
-            // .bearerKey = secrets::DEEPSEEK_BEARER_KEY,
+            // .baseUrl = "http://localhost:11434/v1/",
+            .baseUrl = "https://api.deepseek.com/",
+            .bearerKey = secrets::DEEPSEEK_BEARER_KEY,
         },
         // .model = "qwen3:14b",
-        // .model = "deepseek-chat",
+        .model = "deepseek-chat",
         // .model = "deepseek-reasoner",
 
-        // .model = "gpt-oss-20b-128k:latest", // норм но тупая
-        // .model = "lfm2", // не может вызвать тулы
-        .model = "qwen3.5:9b", // более общительная и легкомысленная. реасонинг всё равно говно
-        // .model = "magistral:latest", // не вызывает тулы
+        // .model = "gpt-oss-20b-128k:latest"; // норм но тупая
+        // .model = "lfm2"; // не может вызвать тулы
+        // .model = "qwen3.5:9b"; // более общительная и легкомысленная. реасонинг всё равно говно
+        // .model = "magistral:latest"; // не вызывает тулы
     };
 
     static const EndpointAndModel ENDPOINT_PHOTO_TO_TEXT {
@@ -382,6 +382,8 @@ world) in the following format:
     };
 
     static constexpr auto PAPIK_CHAT_ID = 625207005;
+    
+    static constexpr bool LOCKDOWN_MODE = false; // If true, Kuni will only see/receive notifications/read chats from PAPIK_CHAT_ID
 
     static constexpr auto DIARY_TOKEN_COUNT_TRIGGER = 20000;
     static constexpr auto DIARY_AVERAGE_ENTRY_SIZE = 1000;
