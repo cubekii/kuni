@@ -664,8 +664,11 @@ Use absolute time in your queries.
             }
             ALOG_DEBUG(LOG_TAG) << "Loaded " << messages.size() << " message(s): " << chat->title_;
             if (messages.empty()) {
-                result += "This chat is empty. Start a new conversation!"; // just like in real tg client
-                goto naxyi;
+                // Kuni sometimes opens random chats?
+                throw AException("Failed to open chat");
+
+                // result += "This chat is empty. Start a new conversation!"; // just like in real tg client
+                // goto naxyi;
             }
             {
                 td::td_api::array<td::td_api::int53> readMessages;
@@ -1016,7 +1019,8 @@ on them.
             };
 
 
-            result = co_await util::populateFromDiaryAIIfNeeded(temporaryContext(), diary(), "{}"_format(chat->id_), R"(
+            if constexpr (config::DEEP_DIALOG_QUERY) {
+                result = co_await util::populateFromDiaryAIIfNeeded(temporaryContext(), diary(), "{}"_format(chat->id_), R"(
 {}
 
 Tell me what should I remember about this chat ({}).
@@ -1030,6 +1034,7 @@ Use absolute time in your queries.
 - chat rules
 - responsibilities
 )"_format(result, util::formatPastHours(std::chrono::weeks(2)))) + result;
+            }
 
             co_return result;
         }

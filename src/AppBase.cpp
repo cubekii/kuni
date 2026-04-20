@@ -101,7 +101,7 @@ AppBase::AppBase(APath workingDir): mDiary(workingDir / "diary"), mWakeupTimer(_
                     }
                 }
     #ifndef AUI_TESTS_MODULE
-                {
+                if constexpr (config::RANDOMLY_GO_SLEEP) {
                     if (std::uniform_real_distribution(0.0, 1.0)(re) < 0.1) {
                         // 1. randomly go afk is humane
                         // 2. reduce resource usage:
