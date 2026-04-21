@@ -168,10 +168,10 @@ struct State {
                             continue;
                         }
                         includedIds << i.entry->id;
-                        formattedResponse += R"(<memory_piece relatedness="{}">
+                        formattedResponse += R"(<memory_piece source="{}.md" relatedness="{}">
 {}
 </memory_piece>
-)"_format(i.relatedness, i.entry->freeformBody);
+)"_format(i.entry->id, i.relatedness, i.entry->freeformBody);
                     }
                     if (formattedResponse.empty()) {
                         if (!diaryResponse.empty()) {
@@ -180,6 +180,12 @@ struct State {
                         }
                         co_return "No data was found";
                     }
+                    formattedResponse += "\n# IMPORTANT\n\n"
+                                         "Responses above may be incomplete. \n"
+                                         "You must call #query again before answering.\n"
+                                         "Call #query again to collect details, resolve contradictions, and improve "
+                                         "overall quality of the response.\n"
+                    ;
                     co_return formattedResponse;
                 },
             },
@@ -191,6 +197,10 @@ You are a database searcher and summarizer.
 The user asks you a question. Your job is to retrieve data solely from #query tool. Your
 job is to output data that fully satisfies user's query and would be helpful.
 
+ALWAYS strengthen your response by mentioning source file names (`*.md`)
+
+You should call #query at least 2-3 times before making answer.
+
 Also, please include additional details that does not necessarily address the question
 (i.e., dates, names, events) but might be helpful to improve quality of subsequent
 processing of your response.
@@ -199,7 +209,7 @@ Do not alter facts.
 
 Do not make up facts. Rely exclusively on provided context.
     )",
-            // .config = config::ENDPOINT_CHEAP_LLM,
+            // .config = config::ENDPOINT_SLEEPING,
             .tools = tools.asJson(),
         };
 
