@@ -47,7 +47,7 @@ namespace {
 
 
     protected:
-        AFuture<> telegramPostMessage(int64_t chatId, AString text, AOptional<_<AImage>> photo = std::nullopt) {
+        AFuture<> telegramPostMessage(int64_t chatId, AString text, AOptional<_<AImage>> photo = std::nullopt, int64_t replyTo = 0) {
             // Check lockdown mode - only allow PAPIK_CHAT_ID if lockdown is enabled
             if constexpr (config::LOCKDOWN_MODE) {
                 if (chatId != config::PAPIK_CHAT_ID) {
@@ -82,6 +82,9 @@ namespace {
                     }();
                     return content;
                 }();
+                if (replyTo != 0) {
+                    msg->reply_to_ = TelegramClient::toPtr(td::td_api::inputMessageReplyToMessage(replyTo, nullptr, 0));
+                }
                 return msg;
             }());
         }
@@ -823,8 +826,22 @@ on them.
                         {
                             .properties =
                                 {
-                                    {"text", {.type = "string", .description = "Text of the message. May not be specified if photo_filename is set"}},
-                                    {"photo_filename", {.type = "string", .description = "Attaches a photo with the given filename. Filename can be obtained by #take_photo tool; althrough you can attach any file as soon as their filename is correct."}},
+                                    {"text", {
+                                        .type = "string",
+                                        .description = "Text of the message. May not be specified if photo_filename is set"},
+                                    },
+                                    {"photo_filename", {
+                                        .type = "string",
+                                        .description = "Attaches a photo with the given filename. Filename can be "
+                                        "obtained by #take_photo tool; althrough you can attach any file as soon as "
+                                        "their filename is correct."},
+                                    },
+                                    {"reply_to_message_id", {
+                                        .type = "integer",
+                                        .description = "If specified, the message will be rendered as a reply to the "
+                                        "message with given message id. You must use it if there are multiple messages "
+                                        "or to clearly address specific mesasge."},
+                                    },
                                 },
                             .required = {},
                         },
@@ -835,6 +852,7 @@ on them.
                         }
                         auto message = ctx.args["text"].asStringOpt().valueOr("");
                         auto photoFilename = ctx.args["photo_filename"].asStringOpt().valueOr("");
+                        auto replyTo = ctx.args["reply_to_message_id"].asLongIntOpt().valueOr(0);
 
                         if (message.empty() && photoFilename.empty()) {
                             throw AException("At least \"text\" or \"photo_filename\" must be populated");
@@ -985,7 +1003,7 @@ on them.
                         // to one tick).
                         // however, if something goes wrong, this is reported as an exception to LLM and it will know
                         // that a technical issue appeared during sending the message (i.e., LLMs bot was banned)
-                        co_await telegramPostMessage(chat->id_, message, std::move(photo));
+                        co_await telegramPostMessage(chat->id_, message, std::move(photo), replyTo);
 
                         // indicate that bot is typing once again; this would feel natural if llm sends series of
                         // messages.
