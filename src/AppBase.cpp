@@ -127,6 +127,19 @@ AppBase::AppBase(APath workingDir): mDiary(workingDir / "diary"), mWakeupTimer(_
                 notification.message += "\nCurrent time: {}"_format(std::chrono::system_clock::now());
                 AUI_DEFER { notification.onProcessed.supplyValue(); };
                 try {
+                    if (notification.actions.handlers().size() == 1) {
+                        const auto& action = notification.actions.handlers().begin()->second;
+                        if (action.name == "open" && action.parameters.properties.size() == 0) {
+                            // shortcut/optimization: if the notification gives the only option to open it, there's no
+                            // need to ask LLM whether it wants to open the notification because it does it
+                            // in 100% cases.
+                            // Also, this greatly fits in the current architecture, because we can't change notification
+                            // text at runtime, BUT we can provide more recent data by giving the notification code
+                            // control by calling "open()".
+                            notification.message = co_await action.handler({notification.actions, AJson {}});
+                        }
+                    }
+
                     self.mTemporaryContext << OpenAIChat::Message{
                         .role = OpenAIChat::Message::Role::USER,
                         .content = std::move(notification.message),
