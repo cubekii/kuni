@@ -23,6 +23,7 @@
 #include "util/populate_from_diary_ai_if_needed.h"
 
 #include <range/v3/action/reverse.hpp>
+#include <range/v3/algorithm/contains.hpp>
 #include <range/v3/algorithm/sort.hpp>
 
 using namespace std::chrono_literals;
@@ -253,7 +254,7 @@ Use absolute time in your queries.
                 if (chat->last_message_) {
                     preview = co_await extractSenderName(*chat->last_message_);
                     preview += ": ";
-                    extractMessageTypeAndText(preview, *chat->last_message_);
+                    preview += extractMessageTypeAndText(*chat->last_message_);
                     preview.replaceAll("\n", " ");
 
                     if (preview.length() > 80) {
@@ -444,7 +445,8 @@ Use absolute time in your queries.
             }
         }
 
-        void extractMessageTypeAndText(AString& out, td::td_api::message& msg) {
+        AString extractMessageTypeAndText(td::td_api::message& msg) {
+            AString out;
             td::td_api::downcast_call(
                 *msg.content_,
                 aui::lambda_overloaded {
@@ -556,6 +558,7 @@ Use absolute time in your queries.
                   [&](td::td_api::messageUnsupported&) { out += "[unsupported message]"; },
                   []<typename T>(T&) { static_assert(sizeof(T) > 0, "Unknown message type"); },
                 });
+            return out;
         }
         AFuture<AString> extractSenderName(td::td_api::message& msg) {
             int64_t senderId {};
@@ -671,7 +674,7 @@ Use absolute time in your queries.
                 }
             }
 
-            extractMessageTypeAndText(result, msg);
+            result += extractMessageTypeAndText(msg);
 
             result += "\n</{}>\n"_format(formattedXmlTag);
             co_return result;
@@ -710,7 +713,6 @@ Use absolute time in your queries.
             });
             AString result;
 
-            AStringVector kuniMessages;
             std::valarray<double> chatEmbedding;
             td::td_api::array<td::td_api::object_ptr<td::td_api::message>> messages;
             {
@@ -760,7 +762,6 @@ Use absolute time in your queries.
                            aui::lambda_overloaded{
                            [&](td::td_api::messageText& text) {
                                checkForMaliciousPayloads(text.text_->text_);
-                               kuniMessages << text.text_->text_;
                                if (text.link_preview_) {
                                    result += "\n\n" + to_string(text.link_preview_) + "\n";
                                }
@@ -912,14 +913,21 @@ on them.
                                 },
                             .required = {},
                         },
-                    .handler = [this, chat, chatEmbedding = std::move(chatEmbedding), messagesInRow = _new<int>(0), kuniMessages = std::move(kuniMessages)](OpenAITools::Ctx ctx) -> AFuture<AString> {
+                    .handler = [this,
+                                  chat,
+                                  chatEmbedding = std::move(chatEmbedding),
+                                  messagesInRow = _new<int>(0),
+                                  messages = _new<td::td_api::array<td::td_api::object_ptr<td::td_api::message>>>(std::move(messages))
+                                  ](OpenAITools::Ctx ctx) -> AFuture<AString> {
                         if (*messagesInRow > 10) {
                             // stupid AI can't recognize it spams messages despite the warning
                             throw AException("Too many messages in a row. Don't spam!");
                         }
-                        auto message = ctx.args["text"].asStringOpt().valueOr("");
-                        auto photoFilename = ctx.args["photo_filename"].asStringOpt().valueOr("");
-                        auto replyTo = ctx.args["reply_to_message_id"].asLongIntOpt().valueOr(0);
+                        mTelegram->sendQuery(TelegramClient::toPtr(td::td_api::sendChatAction(chat->id_, {}, {}, TelegramClient::toPtr(td::td_api::chatActionTyping()))));
+
+                        const auto message = ctx.args["text"].asStringOpt().valueOr("");
+                        const auto photoFilename = ctx.args["photo_filename"].asStringOpt().valueOr("");
+                        const auto replyTo = ctx.args["reply_to_message_id"].asLongIntOpt().valueOr(0);
 
                         if (message.empty() && photoFilename.empty()) {
                             throw AException("At least \"text\" or \"photo_filename\" must be populated");
@@ -934,7 +942,20 @@ on them.
                                     "send multiple messages by subsequent #send_telegram_message calls");
                             }
                         }
-                        mTelegram->sendQuery(TelegramClient::toPtr(td::td_api::sendChatAction(chat->id_, {}, {}, TelegramClient::toPtr(td::td_api::chatActionTyping()))));
+
+                        // Alex2772 (Apr 23 2026):
+                        //
+                        // After the introduction of reply_to_message_id, Kuni started to confuse between chats. Opening
+                        // a chat, it tries to reply to a message from another chat by specifying reply_to_message_id.
+                        if (replyTo != 0) {
+                            if (!ranges::contains(messages, replyTo, [](const auto& m) { return m->id_; })) {
+                                // I'm not exactly sure how we should handle this.
+                                // first, if LLM is confused between chats, this means a high privacy violation
+                                // risk.
+                                // second, ideally, I should crash the application.
+                                throw AException("You are trying to send a message to another chat!");
+                            }
+                        }
 
                         // verify that kuni does not repeat itself.
                         // after introducing this quality of dialogs with LLM was significantly increased:
@@ -964,10 +985,19 @@ on them.
                                 mTemporaryContext.last().content.bytes().insert(0, takeDiaryEntry(i).toStdString());
                             };
 
-                            for (const auto& i : kuniMessages) {
-                                auto& embedding = embeddings[i];
+                            size_t countOfKunisMessages = 0;
+                            for (auto& i : *messages) {
+                                if (i->sender_id_->get_id() != td::td_api::messageSenderUser::ID) {
+                                    continue;
+                                }
+                                if (static_cast<const td::td_api::messageSenderUser&>(*i->sender_id_).user_id_ != mTelegram->myId()) {
+                                    continue;
+                                }
+                                ++countOfKunisMessages;
+                                auto text = extractMessageTypeAndText(*i);
+                                auto& embedding = embeddings[text];
                                 if (embedding.size() != target.size()) {
-                                    embedding = co_await OpenAIChat{.config = config::ENDPOINT_EMBEDDING}.embedding(i);
+                                    embedding = co_await OpenAIChat{.config = config::ENDPOINT_EMBEDDING}.embedding(text);
                                 }
                                 const auto similiarity = util::cosine_similarity(target, embedding);
                                 avgSimilarity += similiarity;
@@ -1011,11 +1041,10 @@ on them.
                                     // I'm trying to make Kuni more lazy by suggesting closing a chat on a low-quality
                                     // follow-up.
 
-                                    throw AException("You are repeating yourself, which usually means you have "
-                                        "nothing to put in. Suggestion: close the chat");
+                                    throw AException(config::REPEAT_YOURSELF_PROMPT);
                                 }
                             }
-                            avgSimilarity /= kuniMessages.size();
+                            avgSimilarity /= countOfKunisMessages;
                             if (avgSimilarity > config::REPEAT_YOURSELF_TRIGGER_AVG) {
                                 // LLM figured out threshold of REPEAT_YOURSELF_TRIGGER_MAX and indeed it generates
                                 // slightly more variative responses, but their general direction and structure feels
@@ -1033,8 +1062,7 @@ on them.
                                 // switch topic
 
                                 ALogger::warn(LOG_TAG) << "LLM is repeating itself: (avgSimilarity=" << avgSimilarity << ")" << message;
-                                co_await injectFirstDiaryEntry();
-                                co_return "<{} />"_format(OpenAIChat::EMBEDDING_TAG);
+                                throw AException(config::REPEAT_YOURSELF_PROMPT);
                             }
 
                             if (embeddings.size() >= config::REPEAT_YOURSELF_MAX_HISTORY) {
